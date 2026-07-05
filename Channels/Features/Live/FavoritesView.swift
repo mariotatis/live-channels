@@ -9,8 +9,8 @@
 import SwiftUI
 
 struct FavoritesView: View {
-    @State private var store = LiveStore.shared
-    @State private var playback = LivePlayback()
+    @ObservedObject private var store = LiveStore.shared
+    @StateObject private var playback = LivePlayback()
 
     var body: some View {
         content
@@ -40,5 +40,5 @@ struct FavoritesView: View {
 }
 
 #Preview {
-    NavigationStack { FavoritesView() }
+    NavContainer { FavoritesView() }
 }

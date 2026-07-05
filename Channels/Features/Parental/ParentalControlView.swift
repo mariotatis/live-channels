@@ -11,7 +11,7 @@ import SwiftUI
 
 struct ParentalControlView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var parental = ParentalControl.shared
+    @ObservedObject private var parental = ParentalControl.shared
 
     @State private var setupToEnable = false
     @State private var changePin = false
@@ -39,7 +39,7 @@ struct ParentalControlView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
+        .clearListBackground()
         .mooveesBackground()
         .navigationTitle("Parental Control")
         .navigationBarTitleDisplayMode(.inline)
@@ -47,13 +47,13 @@ struct ParentalControlView: View {
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
         }
         .sheet(isPresented: $setupToEnable) {
-            NavigationStack {
+            NavContainer {
                 PinSetupView(onSaved: { parental.enable() })
                     .navigationTitle("Set PIN").navigationBarTitleDisplayMode(.inline)
             }
         }
         .sheet(isPresented: $changePin, onDismiss: { changePinVerified = false }) {
-            NavigationStack {
+            NavContainer {
                 if parental.hasPin && !changePinVerified {
                     // Changing an existing PIN requires the current PIN first.
                     PinEntryView(title: "Enter Current PIN",
@@ -72,7 +72,7 @@ struct ParentalControlView: View {
             }
         }
         .sheet(isPresented: $verifyToDisable) {
-            NavigationStack {
+            NavContainer {
                 PinEntryView(title: "Turn Off Parental Control",
                              subtitle: "Enter your PIN to turn it off") {
                     parental.disable()

@@ -11,23 +11,23 @@
 import SwiftUI
 
 struct HomeView: View {
-    @State private var store = LiveStore.shared
+    @ObservedObject private var store = LiveStore.shared
     @State private var showParental = false
     @State private var showFavorites = false
 
     var body: some View {
-        NavigationStack {
+        NavContainer {
             content
                 .navigationTitle("Live Channels")
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button { showFavorites = true } label: {
                             Image(systemName: "heart")
                                 .foregroundStyle(.white)
                         }
                         .accessibilityLabel("Liked Channels")
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button { showParental = true } label: {
                             Image(systemName: "lock.shield")
                                 .foregroundStyle(.white)
@@ -37,14 +37,9 @@ struct HomeView: View {
                 }
                 .mooveesBackground()
                 .task { await store.loadIfNeeded() }
-                .navigationDestination(for: LiveColumn.self) { category in
-                    CategoryChannelsView(category: category)
-                }
-                .navigationDestination(isPresented: $showFavorites) {
-                    FavoritesView()
-                }
+                .homeNavigation(showFavorites: $showFavorites)
                 .sheet(isPresented: $showParental) {
-                    NavigationStack { ParentalControlView() }
+                    NavContainer { ParentalControlView() }
                 }
         }
     }
@@ -72,8 +67,35 @@ struct HomeView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            .clearListBackground()
             .refreshable { await store.load() }
+        }
+    }
+}
+
+private extension View {
+    /// Category push + favorites push. Value-based `.navigationDestination` is
+    /// iOS 16+; on iOS 15 favorites pushes through a hidden `NavigationLink`
+    /// (and `CategoryRow` uses a destination-based link).
+    @ViewBuilder
+    func homeNavigation(showFavorites: Binding<Bool>) -> some View {
+        if #available(iOS 16.0, *) {
+            self
+                .navigationDestination(for: LiveColumn.self) { category in
+                    CategoryChannelsView(category: category)
+                }
+                .navigationDestination(isPresented: showFavorites) {
+                    FavoritesView()
+                }
+        } else {
+            self.background(
+                NavigationLink(isActive: showFavorites) {
+                    FavoritesView()
+                } label: {
+                    EmptyView()
+                }
+                .hidden()
+            )
         }
     }
 }
@@ -86,21 +108,34 @@ private struct CategoryRow: View {
     @State private var count: Int?
 
     var body: some View {
-        NavigationLink(value: category) {
-            HStack {
-                Text(category.name)
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                if let count {
-                    Text("\(count)")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.textSecondary)
-                        .monospacedDigit()
-                }
+        rowLink
+            .task {
+                if count == nil { count = await store.channels(for: category).count }
             }
+    }
+
+    /// iOS 16+ pushes via value (paired with `navigationDestination(for:)`); iOS
+    /// 15 pushes the destination directly since value-based routing isn't available.
+    @ViewBuilder
+    private var rowLink: some View {
+        if #available(iOS 16.0, *) {
+            NavigationLink(value: category) { label }
+        } else {
+            NavigationLink { CategoryChannelsView(category: category) } label: { label }
         }
-        .task {
-            if count == nil { count = await store.channels(for: category).count }
+    }
+
+    private var label: some View {
+        HStack {
+            Text(category.name)
+                .foregroundStyle(Theme.textPrimary)
+            Spacer()
+            if let count {
+                Text("\(count)")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textSecondary)
+                    .monospacedDigit()
+            }
         }
     }
 }

@@ -12,10 +12,20 @@ and play. It talks to the **real portal API** (no mock/demo data).
 
 ## 1. Tech & conventions
 
-- **SwiftUI**, target iOS 26, Swift 5, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
-  (most types are MainActor‑isolated by default).
-- **State:** `@Observable` singletons for shared state; `@StateObject`/`ObservableObject` only
-  where needed (the VLC player model).
+- **SwiftUI**, **minimum deployment target iOS 15.6** (runs on iPhone 8), built against the iOS 26
+  SDK, Swift 5, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` (most types are MainActor‑isolated by
+  default).
+- **State:** `ObservableObject` singletons for shared state (`LiveStore`, `ParentalControl`,
+  `ActivationService`) + per‑view `LivePlayback`, observed via `@StateObject`/`@ObservedObject`.
+  (Not `@Observable` — that macro requires iOS 17, and the app supports 15.6.)
+- **iOS‑version fallbacks (`DesignSystem/Compat.swift`):** the app targets the iOS 26 experience but
+  degrades gracefully on older systems, always behind `if #available`. `NavContainer`
+  (`NavigationStack` 16+ / `NavigationView(.stack)` 15), `clearListBackground()`
+  (`scrollContentBackground` 16+ / global `UITableView` appearance on 15), `mediumDetentIfAvailable()`,
+  `trackScrollChrome()` (`onScrollGeometryChange` 18+, else no‑op). **Search:** iOS 26 keeps the
+  floating minimized bottom‑bar button (`searchToolbarBehavior(.minimize)` + `DefaultToolbarItem`);
+  older systems get a nav‑bar top‑right magnifyingglass that reveals `LegacyChannelSearchBar`. The
+  Safari‑style chrome‑hide is iOS 26‑only; older systems keep the nav bar visible.
 - **One external dependency:** `VLCKitSPM` (MobileVLCKit) via SPM — see §7.
 - **Files auto‑compile:** `Channels/` is a `PBXFileSystemSynchronizedRootGroup`, so new `.swift`
   files under it are picked up without editing the `.pbxproj`. **Exception:** `Info.plist` lives at
@@ -188,7 +198,7 @@ stack). Player URL = `http://127.0.0.1:<port>/<token>.m3u8`.
 - The VLC drawable `UIView` has `isUserInteractionEnabled = false` so taps reach SwiftUI to toggle
   controls.
 
-`LivePlayback` (per‑view `@Observable`) coordinates: `play(channel, columnId)` → PIN gate check →
+`LivePlayback` (per‑view `ObservableObject`, `@StateObject`) coordinates: `play(channel, columnId)` → PIN gate check →
 `ContentService.liveStream` → `playerStream` → `.livePlayer` modifier presents `PlayerView`.
 On failure it shows an alert with **Refresh** (`refreshAndRetry()` = reload catalog + retry).
 
@@ -199,7 +209,7 @@ mirroring are available — VLC still can't feed PiP/AirPlay.
 
 ## 8. Catalog data & caching — `Core/Services/LiveStore.swift`
 
-`LiveStore.shared` (`@Observable`) is the single source of truth for Home/Channels/Favorites:
+`LiveStore.shared` (`ObservableObject`) is the single source of truth for Home/Channels/Favorites:
 - `allChannels` (getLiveData 76182), `categories` (getColumnContents 76175 → `[LiveColumn]`),
   `categoryChannels` (lazy per‑category getLiveData, cached).
 - **Disk cache, 48h TTL:** the whole catalog is written to
@@ -233,10 +243,13 @@ app‑wide player `fullScreenCover` (see §7).
   left→right): **heart** → liked channels, **lock.shield** → parental. Tap a category →
   `CategoryChannelsView` (searchable grid, scoped, PIN‑gated for 18+, `columnIdFor` = category id).
 - **All Channels** (`LiveView`, pushed) — the full ~1036‑channel grid, search‑by‑name (client‑side
-  over `allChannels`). Search uses the iOS 26 **minimized** behavior (`.searchable(isPresented:)` +
-  `.searchToolbarBehavior(.minimize)`): a collapsed search button that expands on tap and collapses
-  on cancel — kept always‑applied (stable identity, no rebuild flash). The title bar auto‑hides
-  Safari‑style on scroll (suppressed while search is active). Same pattern in `CategoryChannelsView`.
+  over `allChannels`). On **iOS 26** search uses the **minimized** behavior (`.searchable(isPresented:)`
+  + `.searchToolbarBehavior(.minimize)`): a collapsed floating button that expands on tap and collapses
+  on cancel, plus the Safari‑style title‑bar auto‑hide on scroll (suppressed while search is active).
+  On **iOS < 26** the whole `body` switches (`if #available(iOS 26, *)` → `modernBody` else
+  `legacyBody`) to a nav‑bar top‑right magnifyingglass button that reveals `LegacyChannelSearchBar`,
+  with no chrome auto‑hide. Same dual‑path pattern in `CategoryChannelsView` (its top‑right button is
+  suppressed while the 18+ listing is PIN‑locked).
 - **Liked Channels** (`FavoritesView`, pushed from the toolbar heart) — locally‑saved channels.
 
 `ChannelGridView` (`LiveComponents.swift`) is **3 columns portrait / 6 landscape** (keyed off
@@ -250,7 +263,7 @@ subtitle icons, PIN dots. App display name / splash / icon are all "Channels"
 
 ## 11. Parental control — `Core/Services/ParentalControl.swift` + `Features/Parental/`
 
-- `@Observable` singleton, persisted in UserDefaults (`parental.enabled`, `parental.pin`).
+- `ObservableObject` singleton, persisted in UserDefaults (`parental.enabled`, `parental.pin`).
 - Shield icon in the Live Channels nav bar → `ParentalControlView` (toggle + "Pin code" row).
   Turning ON needs a PIN; turning OFF (and changing the PIN) requires entering the current PIN.
 - **Gating:** any channel with `restricted != "0"` requires the PIN at **play** time (from anywhere);

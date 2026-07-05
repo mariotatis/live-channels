@@ -9,7 +9,7 @@
 import SwiftUI
 
 struct RootView: View {
-    @State private var activation = ActivationService.shared
+    @StateObject private var activation = ActivationService.shared
 
     var body: some View {
         Group {
@@ -43,7 +43,7 @@ struct SplashView: View {
                     .scaleEffect(pulse ? 1.08 : 0.92)
                     .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
                 Text(AppConfig.appName)
-                    .font(.largeTitle.bold())
+                    .font(.largeTitle.weight(.bold))
                     .foregroundStyle(Theme.brandGradient)
                 ProgressView().tint(Theme.accent)
             }
@@ -61,7 +61,7 @@ struct ServiceUnavailableView: View {
             VStack(spacing: 18) {
                 Image(systemName: "exclamationmark.icloud")
                     .font(.system(size: 56)).foregroundStyle(Theme.textSecondary)
-                Text("Service Unavailable").font(.title2.bold()).foregroundStyle(Theme.textPrimary)
+                Text("Service Unavailable").font(.title2.weight(.bold)).foregroundStyle(Theme.textPrimary)
                 Text(message).font(.callout).foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 40)
                 Button("Retry", action: retry)

@@ -246,16 +246,24 @@ final class NativePlayerModel: NSObject, ObservableObject {
     private func setupSubtitlesIfNeeded() {
         guard legibleGroup == nil, let item else { return }
         let asset = item.asset
-        Task { [weak self] in
-            let group = try? await asset.loadMediaSelectionGroup(for: .legible)
-            await MainActor.run {
-                guard let self, let group else { return }
-                self.legibleGroup = group
-                self.hasSubtitles = !group.options.isEmpty
-                // Default off; VLC-style "on by default" isn't idiomatic for HLS CC.
-                item.select(nil, in: group)
+        if #available(iOS 16.0, *) {
+            Task { [weak self] in
+                let group = try? await asset.loadMediaSelectionGroup(for: .legible)
+                await MainActor.run { self?.applyLegibleGroup(group, item: item) }
             }
+        } else {
+            // iOS 15: the async loader doesn't exist; use the synchronous accessor.
+            // The playlist is served locally, so this resolves without a network wait.
+            applyLegibleGroup(asset.mediaSelectionGroup(forMediaCharacteristic: .legible), item: item)
         }
+    }
+
+    private func applyLegibleGroup(_ group: AVMediaSelectionGroup?, item: AVPlayerItem) {
+        guard let group else { return }
+        legibleGroup = group
+        hasSubtitles = !group.options.isEmpty
+        // Default off; VLC-style "on by default" isn't idiomatic for HLS CC.
+        item.select(nil, in: group)
     }
 
     func toggleSubtitles() {

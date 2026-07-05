@@ -8,22 +8,24 @@
 //
 
 import Foundation
-import Observation
+import Combine
 
 @MainActor
-@Observable
-final class ParentalControl {
+final class ParentalControl: ObservableObject {
     static let shared = ParentalControl()
 
     private let d = UserDefaults.standard
     private let enabledKey = "parental.enabled"
     private let pinKey = "parental.pin"
 
-    private(set) var isEnabled: Bool
-    private var pin: String?
+    @Published private(set) var isEnabled: Bool
+    // @Published so `hasPin`-driven UI (the "Set"/"Change" label) refreshes.
+    @Published private var pin: String?
 
     /// After a correct PIN, everything stays unlocked until this time (1 min).
-    private var unlockUntil: Date?
+    // @Published so a granted unlock re-evaluates `locked` in CategoryChannelsView
+    // (under @Observable every stored property was tracked; @Published is explicit).
+    @Published private var unlockUntil: Date?
     private let unlockWindow: TimeInterval = 60
 
     private init() {

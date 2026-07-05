@@ -407,7 +407,7 @@ final class PlaybackCoordinator: ObservableObject {
 
 struct PlayerView: View {
     @ObservedObject private var coordinator: PlaybackCoordinator
-    @State private var liveStore = LiveStore.shared
+    @ObservedObject private var liveStore = LiveStore.shared
 
     /// The coordinator is owned by PlaybackSession (so it can outlive this view
     /// for Picture in Picture) — the view only observes it.
@@ -482,7 +482,7 @@ struct PlayerView: View {
         VStack {
             HStack(spacing: 18) {
                 Button { PlaybackSession.shared.dismiss() } label: {
-                    Image(systemName: "chevron.down").font(.title3.bold())
+                    Image(systemName: "chevron.down").font(.title3.weight(.bold))
                 }
                 Text(coordinator.stream.title).font(.headline).lineLimit(1)
                 Spacer()
@@ -545,7 +545,7 @@ struct PlayerView: View {
     }
 
     private var engineSheet: some View {
-        NavigationStack {
+        NavContainer {
             List {
                 Section {
                     ForEach(PlayerEngine.allCases) { option in
@@ -560,7 +560,7 @@ struct PlayerView: View {
                                 }
                                 Spacer()
                                 if coordinator.engine == option {
-                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent).fontWeight(.semibold)
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent).font(.body.weight(.semibold))
                                 }
                             }
                         }
@@ -577,6 +577,6 @@ struct PlayerView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .mediumDetentIfAvailable()
     }
 }

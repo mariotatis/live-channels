@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Grid of channel cards (3 per row) with favorite toggle + tap-to-play.
 /// `columnIdFor` supplies the columnId a channel plays from — this matters for
@@ -14,16 +15,22 @@ import SwiftUI
 /// ChannelList column. Defaults to the flat ChannelList column.
 struct ChannelGridView: View {
     let channels: [Channel]
-    @Bindable var store: LiveStore
-    @Bindable var playback: LivePlayback
+    @ObservedObject var store: LiveStore
+    @ObservedObject var playback: LivePlayback
     var columnIdFor: (Channel) -> Int = { _ in AppConfig.liveColumnId }
 
-    /// Landscape (vertical size class `.compact` on iPhone) fits twice as many
-    /// columns as portrait.
+    /// iPhone shows 3 per row in portrait and 6 in landscape (vertical size class
+    /// `.compact`). iPad is roomy enough for 6 in both orientations — and its
+    /// vertical size class is always `.regular`, so it needs an explicit case.
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var columns: [GridItem] {
-        let count = verticalSizeClass == .compact ? 6 : 3
+        let count: Int
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            count = 6
+        } else {
+            count = verticalSizeClass == .compact ? 6 : 3
+        }
         return Array(repeating: GridItem(.flexible(), spacing: 10), count: count)
     }
 
@@ -54,12 +61,12 @@ extension View {
 }
 
 private struct LivePlayerModifier: ViewModifier {
-    @Bindable var playback: LivePlayback
+    @ObservedObject var playback: LivePlayback
 
     func body(content: Content) -> some View {
         content
             .sheet(item: $playback.pinRequest) { request in
-                NavigationStack {
+                NavContainer {
                     PinEntryView(title: request.channel.displayName,
                                  subtitle: "Enter your PIN to play this channel") {
                         playback.pinAccepted()

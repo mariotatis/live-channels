@@ -14,7 +14,7 @@
 //
 
 import Foundation
-import Observation
+import Combine
 
 /// A favorited channel plus the columnId it was played from. The columnId
 /// matters: some channels (e.g. 18+) only exist under their category column,
@@ -26,20 +26,19 @@ struct FavoriteChannel: Codable, Identifiable, Hashable {
 }
 
 @MainActor
-@Observable
-final class LiveStore {
+final class LiveStore: ObservableObject {
     static let shared = LiveStore()
 
     // MARK: Catalog
-    var allChannels: [Channel] = []
-    var categories: [LiveColumn] = []
-    private(set) var categoryChannels: [Int: [Channel]] = [:]
+    @Published var allChannels: [Channel] = []
+    @Published var categories: [LiveColumn] = []
+    @Published private(set) var categoryChannels: [Int: [Channel]] = [:]
 
-    var isLoading = false
-    var errorMessage: String?
+    @Published var isLoading = false
+    @Published var errorMessage: String?
 
     // MARK: Favorites (local only)
-    private(set) var favorites: [FavoriteChannel] = []
+    @Published private(set) var favorites: [FavoriteChannel] = []
     private var favoriteCodes: Set<String> = []
 
     private let defaults = UserDefaults.standard

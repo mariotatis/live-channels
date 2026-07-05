@@ -7,11 +7,10 @@
 //
 
 import Foundation
-import Observation
+import Combine
 
 @MainActor
-@Observable
-final class ActivationService {
+final class ActivationService: ObservableObject {
     static let shared = ActivationService()
 
     enum State: Equatable {
@@ -21,8 +20,8 @@ final class ActivationService {
         case failed(String)
     }
 
-    private(set) var state: State = .idle
-    private(set) var session: Session?
+    @Published private(set) var state: State = .idle
+    @Published private(set) var session: Session?
     private var heartbeatTask: Task<Void, Never>?
 
     private let sessionKey = "session.triple"

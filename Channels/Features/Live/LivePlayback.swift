@@ -9,17 +9,16 @@
 //
 
 import Foundation
-import Observation
+import Combine
 
 @MainActor
-@Observable
-final class LivePlayback {
-    var loadingChannelCode: String?
-    var errorMessage: String?
-    var isRefreshing = false
+final class LivePlayback: ObservableObject {
+    @Published var loadingChannelCode: String?
+    @Published var errorMessage: String?
+    @Published var isRefreshing = false
 
     /// Set when a restricted channel needs the PIN before it can play.
-    var pinRequest: PinRequest?
+    @Published var pinRequest: PinRequest?
 
     /// The last channel we tried to play, for a refresh-and-retry.
     private var lastAttempt: (channel: Channel, columnId: Int)?

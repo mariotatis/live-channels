@@ -50,7 +50,7 @@ struct PinPadView: View {
         VStack(spacing: 28) {
             Spacer(minLength: 0)
             VStack(spacing: 8) {
-                Text(title).font(.title2.bold()).foregroundStyle(Theme.textPrimary)
+                Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.textPrimary)
                 if let subtitle {
                     Text(subtitle).font(.callout).foregroundStyle(Theme.textSecondary)
                         .multilineTextAlignment(.center)
@@ -162,26 +162,26 @@ struct PinSetupView: View {
     @State private var error: String?
 
     var body: some View {
-        Group {
-            if let firstPin {
-                PinPadView(title: "Confirm PIN", subtitle: "Re-enter the 6-digit PIN", errorMessage: error) { code in
-                    if code == firstPin {
-                        ParentalControl.shared.setPin(code)
-                        onSaved()
-                        dismiss()
-                        return true
-                    } else {
-                        error = "PINs don't match. Start over."
-                        self.firstPin = nil
-                        return false
-                    }
-                }
+        // One PinPadView for BOTH steps (no branch swap). Swapping between two
+        // same-type views in an if/else Group fails to re-render on iOS 15; keeping
+        // a single stable instance and only changing its title/prompt is reliable.
+        // The pad clears its own digits whenever `onCode` returns true.
+        PinPadView(title: firstPin == nil ? "Set a PIN" : "Confirm PIN",
+                   subtitle: firstPin == nil ? "Choose a 6-digit PIN" : "Re-enter the 6-digit PIN",
+                   errorMessage: error) { entered in
+            if firstPin == nil {
+                error = nil
+                firstPin = entered            // advance to confirm; pad clears itself
+                return true
+            } else if entered == firstPin {
+                ParentalControl.shared.setPin(entered)
+                onSaved()
+                dismiss()
+                return true
             } else {
-                PinPadView(title: "Set a PIN", subtitle: "Choose a 6-digit PIN") { code in
-                    error = nil
-                    firstPin = code
-                    return true
-                }
+                error = "PINs don't match. Start over."
+                firstPin = nil                // back to step 1
+                return false
             }
         }
         .toolbar {
