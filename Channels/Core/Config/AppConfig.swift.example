@@ -1,0 +1,48 @@
+//
+//  AppConfig.swift
+//  Channels
+//
+//  Central configuration for the Xuper/portal IPTV backend (crypto key,
+//  bootstrap hosts, client identity, captured session, catalog column ids).
+//
+//  This is a template. Copy to `AppConfig.swift` and fill in the real values
+//  (recovered from an Android APK / runtime capture — see ARCHITECTURE.md).
+//
+
+import Foundation
+
+enum AppConfig {
+
+    // MARK: - Backend hosts (DGA/rotating; client does main→backup failover)
+    static let defaultPortalHost = "YOUR_PORTAL_HOST.example.com"
+    static let defaultBackupHost = "YOUR_BACKUP_HOST.example.com"
+
+    static let bootstrapPortalHost = defaultPortalHost
+    static let backupPortalHost = defaultBackupHost
+
+    // MARK: - Client identity (CONFIRMED from runtime capture of the working app)
+    static let apkId = "com.example.yourapp"      // header `apk` + body `appId`
+    static let apkVer = "00000"                    // header `apkVer`
+    static let apkVersionBody = "00000"            // body `apkVersion`
+    static let spkgVer = "0000-00-00 00:00:00_00_00_"
+
+    // MARK: - Body cipher key (decrypted PORTAL_KEY of this build)
+    static let bodyKey = "00000000-0000-0000-0000-000000000000"
+
+    // MARK: - Captured working session values
+    static let capturedSn = "YOUR_CAPTURED_SN"
+    static let capturedDrmId = "YOUR_CAPTURED_DRM_ID"
+    static let capturedReserve1 = "YOUR_CAPTURED_RESERVE1"
+
+    // MARK: - Catalog column ids (masnew)
+    static let liveColumnId = 00000          // flat "ChannelList"
+    static let liveCategoryColumnId = 00000  // category tree root
+
+    // MARK: - API
+    static let apiPrefix = "api/portalCore"
+    static let scheme = "https"
+    static let authVersion = "1"
+
+    /// App display name (splash).
+    static let appName = "Channels"
+}

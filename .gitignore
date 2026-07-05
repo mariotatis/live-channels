@@ -1,0 +1,61 @@
+# ---- Secrets (never commit) ----
+# Real config with hosts/keys/session values. Use AppConfig.swift.example as the template.
+Channels/Core/Config/AppConfig.swift
+
+# ---- Claude Code ----
+.claude/
+
+# ---- macOS ----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon
+
+# ---- Xcode ----
+## User settings
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+## Build products & derived data
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Xcode automatic backups
+timeline.xctimeline
+playground.xcworkspace
+
+# ---- Swift Package Manager ----
+.build/
+.swiftpm/
+Packages/
+Package.pins
+# Keep Package.resolved for reproducible dependency versions (comment out to ignore)
+# *.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# ---- CocoaPods (not used here, kept for safety) ----
+Pods/
+
+# ---- Carthage (not used here, kept for safety) ----
+Carthage/Build/
+
+# ---- Fastlane (not used here, kept for safety) ----
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# ---- Misc ----
+*.log
+*.swp
+*~
