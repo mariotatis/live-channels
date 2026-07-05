@@ -13,13 +13,12 @@ struct FavoritesView: View {
     @State private var playback = LivePlayback()
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("Favorites")
-                .mooveesBackground()
-                .task { await store.loadIfNeeded() }
-                .livePlayer(playback)
-        }
+        content
+            .navigationTitle("Favorites")
+            .navigationBarTitleDisplayMode(.inline)
+            .mooveesBackground()
+            .task { await store.loadIfNeeded() }
+            .livePlayer(playback)
     }
 
     @ViewBuilder
@@ -41,5 +40,5 @@ struct FavoritesView: View {
 }
 
 #Preview {
-    FavoritesView()
+    NavigationStack { FavoritesView() }
 }

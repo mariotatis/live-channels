@@ -26,21 +26,21 @@ and play. It talks to the **real portal API** (no mock/demo data).
 
 ```
 Channels/
-  App/            RootView (splash/gate), RootTabView (3 tabs), Router (AppTab enum)
+  App/            RootView (splash/gate), RootTabView (single-stack shell + player cover)
   Core/
     Config/       AppConfig.swift          — all hosts, secrets, ids, version identity
     Networking/   CryptoBox, Endpoints, PortalClient
     Session/      ActivationService, DeviceFingerprint, KeychainStore
     Services/     ContentService, LiveStore, ParentalControl
     Models/       Common, Session, LiveModels
-    Player/       PlayableStream, PlayerView (VLC), LocalStreamProxy
+    Player/       PlayableStream, PlayerView (engines), NativePlayer, PlaybackSession, LocalStreamProxy
   DesignSystem/   Theme, Components (state/empty/error views, PosterImage)
   Features/
-    Home/         HomeView (Categories list), CategoryChannelsView
-    Live/         LiveView (Channels), FavoritesView, LiveChannelCard,
+    Home/         HomeView (Live Channels home), CategoryChannelsView
+    Live/         LiveView (All Channels), FavoritesView (Liked Channels), LiveChannelCard,
                   LiveComponents (grid + .livePlayer modifier), LivePlayback
     Parental/     ParentalControlView, PinViews
-Info.plist        (repo root) — ATS + background audio
+Info.plist        (repo root) — ATS + background audio + local network (AirPlay)
 ARCHITECTURE.md   (this file)
 ```
 
@@ -225,29 +225,36 @@ mirroring are available — VLC still can't feed PiP/AirPlay.
 
 ## 10. Features / UI — `Features/` + `App/`
 
-Three tabs (`Router.AppTab`, hosted by `RootTabView`):
-1. **Categories** (`HomeView`, icon `list.bullet`, title "Categories") — a plain list of the 38 live
-   categories with per‑category channel counts; tap → `CategoryChannelsView` (searchable grid,
-   scoped to that category, PIN‑gated for 18+).
-2. **Channels** (`LiveView`) — the full ~1036‑channel grid, search‑by‑name (client‑side over
-   `allChannels`), 3 columns, no channel numbers.
-3. **Favorites** (`FavoritesView`) — locally‑saved channels.
+**No tab bar.** `RootTabView` is a thin shell: a single `NavigationStack` (`HomeView`) plus the
+app‑wide player `fullScreenCover` (see §7).
 
-Shared: `ChannelGridView` + `LiveChannelCard` (logo, name, favorite heart) and the `.livePlayer`
-modifier (`LiveComponents.swift`). Design tokens in `DesignSystem/Theme.swift`.
+- **Live Channels home** (`HomeView`, title "Live Channels") — a `List` with an **All Channels**
+  shortcut row on top, then a **Categories** section (per‑category channel counts). Toolbar (trailing,
+  left→right): **heart** → liked channels, **lock.shield** → parental. Tap a category →
+  `CategoryChannelsView` (searchable grid, scoped, PIN‑gated for 18+, `columnIdFor` = category id).
+- **All Channels** (`LiveView`, pushed) — the full ~1036‑channel grid, search‑by‑name (client‑side
+  over `allChannels`). Search uses the iOS 26 **minimized** behavior (`.searchable(isPresented:)` +
+  `.searchToolbarBehavior(.minimize)`): a collapsed search button that expands on tap and collapses
+  on cancel — kept always‑applied (stable identity, no rebuild flash). The title bar auto‑hides
+  Safari‑style on scroll (suppressed while search is active). Same pattern in `CategoryChannelsView`.
+- **Liked Channels** (`FavoritesView`, pushed from the toolbar heart) — locally‑saved channels.
 
-**Branding/colors:** single accent = mid red‑orange `Theme.accent` for flat UI (tab tint, buttons,
-spinners); `Theme.brandGradient` (red→orange) for the app icon, splash, favorite heart, subtitle &
-parental icons, PIN dots. App display name / splash / icon are all "Channels"
+`ChannelGridView` (`LiveComponents.swift`) is **3 columns portrait / 6 landscape** (keyed off
+`verticalSizeClass`). Shared cell `LiveChannelCard` (logo, name, favorite heart) + the `.livePlayer`
+modifier (PIN prompt + error alert; the player itself is presented from `PlaybackSession`).
+
+**Branding/colors:** single accent = mid red‑orange `Theme.accent` for flat UI (buttons, spinners);
+`Theme.brandGradient` (red→orange) for the app icon, splash, favorite heart, toolbar (heart/shield) &
+subtitle icons, PIN dots. App display name / splash / icon are all "Channels"
 (`CFBundleDisplayName`, `AppConfig.appName`, `Assets.xcassets/AppIcon`).
 
 ## 11. Parental control — `Core/Services/ParentalControl.swift` + `Features/Parental/`
 
 - `@Observable` singleton, persisted in UserDefaults (`parental.enabled`, `parental.pin`).
-- Shield icon in the Categories nav bar → `ParentalControlView` (toggle + "Pin code" row).
+- Shield icon in the Live Channels nav bar → `ParentalControlView` (toggle + "Pin code" row).
   Turning ON needs a PIN; turning OFF (and changing the PIN) requires entering the current PIN.
-- **Gating:** any channel with `restricted != "0"` requires the PIN at **play** time (from any
-  tab/category); the **18+** category also hides its whole listing behind the PIN. A correct PIN
+- **Gating:** any channel with `restricted != "0"` requires the PIN at **play** time (from anywhere);
+  the **18+** category also hides its whole listing behind the PIN. A correct PIN
   grants a **60‑second global unlock** (`grantTemporaryUnlock`), so back‑and‑forth doesn't re‑prompt.
 - `PinViews.swift`: custom 6‑digit keypad (`PinPadView`) with light‑haptic key ticks, an error haptic
   + "no" shake on a wrong PIN, and a lighter pressed‑state per key.

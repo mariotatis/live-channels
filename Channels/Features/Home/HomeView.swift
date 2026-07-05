@@ -2,9 +2,10 @@
 //  HomeView.swift
 //  Channels
 //
-//  "Categories" tab: a plain list of the portal's live category names
-//  (Deportes, Cine y Series, countries, Noticias, NFL/NBA PASS, Música…).
-//  Tapping a category pushes a searchable channel grid for that category.
+//  "Live Channels" home: an "All Channels" shortcut on top, then the portal's
+//  live category names (Deportes, Cine y Series, countries, Noticias, NFL/NBA
+//  PASS, Música…). Tapping a category pushes a searchable channel grid; the
+//  toolbar has quick access to liked channels and parental control.
 //
 
 import SwiftUI
@@ -12,23 +13,35 @@ import SwiftUI
 struct HomeView: View {
     @State private var store = LiveStore.shared
     @State private var showParental = false
+    @State private var showFavorites = false
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Categories")
+                .navigationTitle("Live Channels")
                 .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showFavorites = true } label: {
+                            Image(systemName: "heart")
+                                .foregroundStyle(.white)
+                        }
+                        .accessibilityLabel("Liked Channels")
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showParental = true } label: {
                             Image(systemName: "lock.shield")
-                                .foregroundStyle(Theme.brandGradient)
+                                .foregroundStyle(.white)
                         }
+                        .accessibilityLabel("Parental Control")
                     }
                 }
                 .mooveesBackground()
                 .task { await store.loadIfNeeded() }
                 .navigationDestination(for: LiveColumn.self) { category in
                     CategoryChannelsView(category: category)
+                }
+                .navigationDestination(isPresented: $showFavorites) {
+                    FavoritesView()
                 }
                 .sheet(isPresented: $showParental) {
                     NavigationStack { ParentalControlView() }
@@ -42,14 +55,21 @@ struct HomeView: View {
             LoadingView()
         } else if let errorMessage = store.errorMessage, store.categories.isEmpty {
             ErrorView(message: errorMessage) { Task { await store.load() } }
-        } else if store.categories.isEmpty {
-            EmptyStateView(icon: "square.grid.2x2",
-                           title: "No Categories",
-                           message: "Live categories aren’t available right now.")
         } else {
-            List(store.categories) { category in
-                CategoryRow(category: category, store: store)
-                    .listRowBackground(Theme.surface)
+            List {
+                NavigationLink {
+                    LiveView()
+                } label: {
+                    Text("All Channels")
+                        .foregroundStyle(Theme.textPrimary)
+                }
+                .listRowBackground(Theme.surface)
+                .listRowSeparator(.hidden, edges: .top)
+
+                ForEach(store.categories) { category in
+                    CategoryRow(category: category, store: store)
+                        .listRowBackground(Theme.surface)
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)

@@ -18,8 +18,10 @@ struct CategoryChannelsView: View {
     @State private var channels: [Channel] = []
     @State private var isLoading = true
     @State private var query = ""
-    /// Safari-style: title + search bar hide scrolling down, reappear scrolling up.
+    /// Safari-style: title bar hides scrolling down, reappears scrolling up.
     @State private var chromeHidden = false
+    /// Tracks whether the (minimized) search field is expanded/active.
+    @State private var searchPresented = false
 
     /// The adult category's listing is hidden behind the PIN (respecting the
     /// shared 1-minute unlock window).
@@ -42,13 +44,20 @@ struct CategoryChannelsView: View {
                 }
             } else {
                 grid
-                    .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                    .searchable(text: $query, isPresented: $searchPresented,
                                 prompt: "Search channels")
+                    .searchToolbarBehavior(.minimize)
             }
         }
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarVisibility(chromeHidden ? .hidden : .visible, for: .navigationBar)
+        .toolbar {
+            if !locked {
+                ToolbarSpacer(.flexible, placement: .bottomBar)
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+            }
+        }
+        .toolbarVisibility((chromeHidden && !searchPresented) ? .hidden : .visible, for: .navigationBar)
         .animation(.easeInOut(duration: 0.25), value: chromeHidden)
         .mooveesBackground()
         .task(id: locked) {
@@ -59,33 +68,34 @@ struct CategoryChannelsView: View {
         .livePlayer(playback)
     }
 
-    @ViewBuilder
+    // A ScrollView is always present (even while loading) so the search bar has a
+    // stable scroll context from the first frame — otherwise its background flashes
+    // in when the grid replaces a non-scrolling loading spinner.
     private var grid: some View {
-        if isLoading {
-            LoadingView()
-        } else {
-            ScrollView {
-                if filteredChannels.isEmpty {
-                    EmptyStateView(icon: "tv.slash", title: "No Channels",
-                                   message: query.isEmpty ? "No channels in this category."
-                                                          : "No channels match “\(query)”.")
-                    .padding(.top, 80)
-                } else {
-                    ChannelGridView(channels: filteredChannels, store: store, playback: playback,
-                                    columnIdFor: { _ in category.id })
-                        .padding(.vertical)
-                }
+        ScrollView {
+            if isLoading {
+                LoadingView()
+                    .frame(maxWidth: .infinity, minHeight: 320)
+            } else if filteredChannels.isEmpty {
+                EmptyStateView(icon: "tv.slash", title: "No Channels",
+                               message: query.isEmpty ? "No channels in this category."
+                                                      : "No channels match “\(query)”.")
+                .padding(.top, 80)
+            } else {
+                ChannelGridView(channels: filteredChannels, store: store, playback: playback,
+                                columnIdFor: { _ in category.id })
+                    .padding(.vertical)
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
-                updateChrome(from: old, to: new)
-            }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+            updateChrome(from: old, to: new)
         }
     }
 
     /// Update chrome visibility from a scroll offset change. Always shows at the
     /// top and while a search is active; otherwise hides going down, shows going up.
     private func updateChrome(from oldY: CGFloat, to newY: CGFloat) {
-        if newY <= 0 || !query.isEmpty {
+        if newY <= 0 || !query.isEmpty || searchPresented {
             if chromeHidden { chromeHidden = false }
             return
         }

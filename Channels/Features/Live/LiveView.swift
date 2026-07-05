@@ -13,9 +13,10 @@ struct LiveView: View {
     @State private var store = LiveStore.shared
     @State private var playback = LivePlayback()
     @State private var query = ""
-    /// Safari-style: the title + search bar hide when scrolling down the list and
-    /// reappear when scrolling back up (or at the top).
+    /// Safari-style: the title bar hides when scrolling down and reappears scrolling up.
     @State private var chromeHidden = false
+    /// Tracks whether the (minimized) search field is expanded/active.
+    @State private var searchPresented = false
 
     private var filteredChannels: [Channel] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -24,23 +25,26 @@ struct LiveView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("Channels")
-                .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search channels")
-                .toolbarVisibility(chromeHidden ? .hidden : .visible, for: .navigationBar)
-                .animation(.easeInOut(duration: 0.25), value: chromeHidden)
-                .mooveesBackground()
-                .task { await store.loadIfNeeded() }
-                .livePlayer(playback)
-        }
+        content
+            .navigationTitle("All Channels")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, isPresented: $searchPresented, prompt: "Search channels")
+            .searchToolbarBehavior(.minimize)
+            .toolbar {
+                ToolbarSpacer(.flexible, placement: .bottomBar)
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+            }
+            .toolbarVisibility((chromeHidden && !searchPresented) ? .hidden : .visible, for: .navigationBar)
+            .animation(.easeInOut(duration: 0.25), value: chromeHidden)
+            .mooveesBackground()
+            .task { await store.loadIfNeeded() }
+            .livePlayer(playback)
     }
 
     /// Update chrome visibility from a scroll offset change. Always shows at the
     /// top and while a search is active; otherwise hides going down, shows going up.
     private func updateChrome(from oldY: CGFloat, to newY: CGFloat) {
-        if newY <= 0 || !query.isEmpty {
+        if newY <= 0 || !query.isEmpty || searchPresented {
             if chromeHidden { chromeHidden = false }
             return
         }
@@ -79,5 +83,5 @@ struct LiveView: View {
 }
 
 #Preview {
-    LiveView()
+    NavigationStack { LiveView() }
 }
