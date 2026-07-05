@@ -13,6 +13,9 @@ struct LiveView: View {
     @State private var store = LiveStore.shared
     @State private var playback = LivePlayback()
     @State private var query = ""
+    /// Safari-style: the title + search bar hide when scrolling down the list and
+    /// reappear when scrolling back up (or at the top).
+    @State private var chromeHidden = false
 
     private var filteredChannels: [Channel] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -26,9 +29,26 @@ struct LiveView: View {
                 .navigationTitle("Channels")
                 .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                             prompt: "Search channels")
+                .toolbarVisibility(chromeHidden ? .hidden : .visible, for: .navigationBar)
+                .animation(.easeInOut(duration: 0.25), value: chromeHidden)
                 .mooveesBackground()
                 .task { await store.loadIfNeeded() }
                 .livePlayer(playback)
+        }
+    }
+
+    /// Update chrome visibility from a scroll offset change. Always shows at the
+    /// top and while a search is active; otherwise hides going down, shows going up.
+    private func updateChrome(from oldY: CGFloat, to newY: CGFloat) {
+        if newY <= 0 || !query.isEmpty {
+            if chromeHidden { chromeHidden = false }
+            return
+        }
+        let delta = newY - oldY
+        if delta > 8, !chromeHidden {
+            chromeHidden = true
+        } else if delta < -8, chromeHidden {
+            chromeHidden = false
         }
     }
 
@@ -49,6 +69,9 @@ struct LiveView: View {
                     ChannelGridView(channels: filteredChannels, store: store, playback: playback)
                         .padding(.vertical)
                 }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                updateChrome(from: old, to: new)
             }
             .refreshable { await store.load() }
         }

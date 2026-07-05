@@ -33,12 +33,12 @@ struct LiveChannelCard: View {
 
                     Button(action: onToggleFavorite) {
                         Image(systemName: isFavorite ? "heart.fill" : "heart")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(isFavorite ? AnyShapeStyle(Theme.brandGradient) : AnyShapeStyle(.white))
-                            .padding(6)
+                            .padding(8)
                             .background(.black.opacity(0.5), in: Circle())
                     }
-                    .padding(6)
+                    .padding(2)
                     .buttonStyle(.plain)
                 }
 

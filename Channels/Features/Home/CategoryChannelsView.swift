@@ -18,6 +18,8 @@ struct CategoryChannelsView: View {
     @State private var channels: [Channel] = []
     @State private var isLoading = true
     @State private var query = ""
+    /// Safari-style: title + search bar hide scrolling down, reappear scrolling up.
+    @State private var chromeHidden = false
 
     /// The adult category's listing is hidden behind the PIN (respecting the
     /// shared 1-minute unlock window).
@@ -46,6 +48,8 @@ struct CategoryChannelsView: View {
         }
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarVisibility(chromeHidden ? .hidden : .visible, for: .navigationBar)
+        .animation(.easeInOut(duration: 0.25), value: chromeHidden)
         .mooveesBackground()
         .task(id: locked) {
             guard !locked, channels.isEmpty else { return }
@@ -72,6 +76,24 @@ struct CategoryChannelsView: View {
                         .padding(.vertical)
                 }
             }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                updateChrome(from: old, to: new)
+            }
+        }
+    }
+
+    /// Update chrome visibility from a scroll offset change. Always shows at the
+    /// top and while a search is active; otherwise hides going down, shows going up.
+    private func updateChrome(from oldY: CGFloat, to newY: CGFloat) {
+        if newY <= 0 || !query.isEmpty {
+            if chromeHidden { chromeHidden = false }
+            return
+        }
+        let delta = newY - oldY
+        if delta > 8, !chromeHidden {
+            chromeHidden = true
+        } else if delta < -8, chromeHidden {
+            chromeHidden = false
         }
     }
 }
