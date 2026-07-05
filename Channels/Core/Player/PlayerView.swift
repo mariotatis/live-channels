@@ -229,76 +229,308 @@ struct VLCVideoView: UIViewRepresentable {
     }
 }
 
+// MARK: - Engine coordination
+
+enum PlayerEngine: String, CaseIterable, Identifiable {
+    case native, vlc
+    var id: String { rawValue }
+    var title: String { self == .native ? "Native Player" : "VLC Player" }
+    var subtitle: String {
+        self == .native ? "AirPlay & Picture in Picture" : "Broadest codec support"
+    }
+}
+
+/// Owns the two playback engines and switches between them. Every channel starts
+/// on the native (AVPlayer) engine; if it can't render video (HEVC-in-TS) we fall
+/// back to VLC automatically. The player-selector gear is only offered once the
+/// native engine has proven it can play the channel (`nativeSupported == true`).
+@MainActor
+final class PlaybackCoordinator: ObservableObject {
+    let stream: PlayableStream
+
+    @Published var engine: PlayerEngine = .native
+    /// nil = still detecting, true = native works, false = fell back to VLC.
+    @Published var nativeSupported: Bool? = nil
+    @Published var showControls = true
+    @Published var showEngineSheet = false
+
+    @Published private(set) var native: NativePlayerModel?
+    @Published private(set) var vlc: PlayerModel?
+
+    /// Set by PlaybackSession: re-present the player UI when PiP restore is tapped.
+    var onRestoreUI: (() -> Void)?
+    /// Set by PlaybackSession: PiP was closed by the user (not for restore).
+    var onPiPStopped: (() -> Void)?
+
+    private var cancellables = Set<AnyCancellable>()
+
+    init(stream: PlayableStream) {
+        self.stream = stream
+        startNative()
+    }
+
+    var isPiPActive: Bool { native?.isPiPActive ?? false }
+
+    // MARK: Aggregated state for the shared overlay
+
+    var isBuffering: Bool {
+        switch engine {
+        case .native: return native?.isBuffering ?? true
+        case .vlc:    return vlc?.isBuffering ?? true
+        }
+    }
+
+    /// Only VLC surfaces a hard error to the user — native failures fall back to VLC.
+    var errorMessage: String? {
+        engine == .vlc ? vlc?.errorMessage : nil
+    }
+
+    var showEngineGear: Bool { nativeSupported == true }
+
+    /// The engine has been decided AND is actually playing — only then are the
+    /// trailing controls valid to show (avoids flashing native-only icons like
+    /// AirPlay/PiP while we're still detecting whether AVPlayer can play it).
+    var controlsReady: Bool {
+        switch engine {
+        case .native: return nativeSupported == true && !(native?.isBuffering ?? true)
+        case .vlc:    return !(vlc?.isBuffering ?? true)
+        }
+    }
+
+    /// Video is playing on an AirPlay device (local screen is black) → show a placeholder.
+    var isExternalActive: Bool { engine == .native && (native?.isExternalActive ?? false) }
+    var externalDeviceName: String? { native?.externalDeviceName }
+
+    var fillScreen: Bool {
+        switch engine {
+        case .native: return native?.fillScreen ?? false
+        case .vlc:    return vlc?.fillScreen ?? false
+        }
+    }
+
+    var hasSubtitles: Bool {
+        switch engine {
+        case .native: return native?.hasSubtitles ?? false
+        case .vlc:    return vlc?.hasSubtitles ?? false
+        }
+    }
+
+    var subtitlesOn: Bool {
+        switch engine {
+        case .native: return native?.subtitlesOn ?? false
+        case .vlc:    return vlc?.subtitlesOn ?? false
+        }
+    }
+
+    // MARK: User actions
+
+    func toggleFill() {
+        switch engine {
+        case .native: native?.fillScreen.toggle()
+        case .vlc:    vlc?.fillScreen.toggle()
+        }
+    }
+
+    func toggleSubtitles() {
+        switch engine {
+        case .native: native?.toggleSubtitles()
+        case .vlc:    vlc?.toggleSubtitles()
+        }
+    }
+
+    func retryVLC() { vlc?.reload() }
+
+    func select(_ target: PlayerEngine) {
+        guard target != engine else { return }
+        switch target {
+        case .vlc:
+            native?.teardown(); native = nil
+            ensureVLC(fresh: true)
+            engine = .vlc
+        case .native:
+            vlc?.teardown(); vlc = nil
+            startNative()
+        }
+    }
+
+    // MARK: Engine lifecycle
+
+    private func startNative() {
+        let model = NativePlayerModel(stream: stream)
+        model.onDidRenderVideo = { [weak self] in
+            guard let self, self.engine == .native else { return }
+            self.nativeSupported = true
+        }
+        model.onCannotPlayVideo = { [weak self] in
+            guard let self, self.engine == .native else { return }
+            self.nativeSupported = false
+            self.fallbackToVLC()
+        }
+        model.onPiPRestoreUI = { [weak self] in self?.onRestoreUI?() }
+        model.onPiPStopped = { [weak self] in self?.onPiPStopped?() }
+        bind(model)
+        native = model
+        engine = .native
+    }
+
+    private func fallbackToVLC() {
+        native?.teardown(); native = nil
+        ensureVLC(fresh: true)
+        engine = .vlc
+    }
+
+    private func ensureVLC(fresh: Bool) {
+        if vlc == nil {
+            let model = PlayerModel(stream: stream)   // auto-plays on init
+            bind(model)
+            vlc = model
+        } else if fresh {
+            vlc?.reload()
+        }
+    }
+
+    /// Re-publish sub-model changes so the shared SwiftUI controls stay in sync.
+    private func bind(_ object: any ObservableObject) {
+        (object.objectWillChange as? ObservableObjectPublisher)?
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+
+    func teardown() {
+        native?.teardown(); native = nil
+        vlc?.teardown(); vlc = nil
+        cancellables.removeAll()
+    }
+}
+
 // MARK: - Full player screen with custom controls
 
 struct PlayerView: View {
-    @StateObject private var model: PlayerModel
-    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var coordinator: PlaybackCoordinator
     @State private var liveStore = LiveStore.shared
 
-    init(stream: PlayableStream) {
-        _model = StateObject(wrappedValue: PlayerModel(stream: stream))
+    /// The coordinator is owned by PlaybackSession (so it can outlive this view
+    /// for Picture in Picture) — the view only observes it.
+    init(coordinator: PlaybackCoordinator) {
+        _coordinator = ObservedObject(wrappedValue: coordinator)
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            VLCVideoView(model: model, fill: model.fillScreen).ignoresSafeArea()
+            videoSurface
 
-            if let error = model.errorMessage {
-                VStack(spacing: 16) {
-                    Image(systemName: "play.slash.fill").font(.largeTitle).foregroundStyle(.white.opacity(0.7))
-                    Text("Playback Unavailable").font(.headline).foregroundStyle(.white)
-                    Text(error).font(.callout).foregroundStyle(.white.opacity(0.7))
-                        .multilineTextAlignment(.center).padding(.horizontal, 40)
-                    HStack(spacing: 12) {
-                        Button("Try Again") { model.reload() }
-                            .buttonStyle(.borderedProminent).tint(Theme.accent)
-                        Button("Close") { model.teardown(); dismiss() }
-                            .buttonStyle(.bordered).tint(.white)
-                    }
-                }
-            } else if model.isBuffering {
+            if let error = coordinator.errorMessage {
+                errorOverlay(error)
+            } else if coordinator.isExternalActive {
+                airPlayOverlay
+            } else if coordinator.isBuffering {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
 
-            if model.showControls && model.errorMessage == nil { controlsOverlay }
+            if coordinator.showControls && coordinator.errorMessage == nil { controlsOverlay }
         }
         .statusBarHidden()
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation { model.showControls.toggle() } }
-        .onDisappear { model.teardown() }
+        .onTapGesture { withAnimation { coordinator.showControls.toggle() } }
+        .sheet(isPresented: $coordinator.showEngineSheet) { engineSheet }
+    }
+
+    @ViewBuilder
+    private var videoSurface: some View {
+        switch coordinator.engine {
+        case .native:
+            if let native = coordinator.native {
+                NativeVideoView(model: native).ignoresSafeArea()
+            }
+        case .vlc:
+            if let vlc = coordinator.vlc {
+                VLCVideoView(model: vlc, fill: vlc.fillScreen).ignoresSafeArea()
+            }
+        }
+    }
+
+    private var airPlayOverlay: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "airplayvideo")
+                .font(.system(size: 64))
+                .foregroundStyle(.white)
+            Text(coordinator.externalDeviceName.map { "Playing on \($0)" } ?? "AirPlay")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+        }
+    }
+
+    private func errorOverlay(_ error: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "play.slash.fill").font(.largeTitle).foregroundStyle(.white.opacity(0.7))
+            Text("Playback Unavailable").font(.headline).foregroundStyle(.white)
+            Text(error).font(.callout).foregroundStyle(.white.opacity(0.7))
+                .multilineTextAlignment(.center).padding(.horizontal, 40)
+            HStack(spacing: 12) {
+                Button("Try Again") { coordinator.retryVLC() }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent)
+                Button("Close") { PlaybackSession.shared.endCurrent() }
+                    .buttonStyle(.bordered).tint(.white)
+            }
+        }
     }
 
     private var controlsOverlay: some View {
         VStack {
-            HStack {
-                Button { model.teardown(); dismiss() } label: {
+            HStack(spacing: 18) {
+                Button { PlaybackSession.shared.dismiss() } label: {
                     Image(systemName: "chevron.down").font(.title3.bold())
                 }
-                Text(model.stream.title).font(.headline).lineLimit(1)
+                Text(coordinator.stream.title).font(.headline).lineLimit(1)
                 Spacer()
-                if let channel = model.stream.channel {
-                    Button {
-                        liveStore.toggleFavorite(channel, columnId: model.stream.columnId ?? AppConfig.liveColumnId)
-                    } label: {
-                        Image(systemName: liveStore.isFavorite(channel) ? "heart.fill" : "heart")
-                            .font(.title3)
-                            .foregroundStyle(liveStore.isFavorite(channel) ? AnyShapeStyle(Theme.brandGradient) : AnyShapeStyle(.white))
+
+                // Trailing controls appear only once the engine is resolved and
+                // playing, so no invalid/native-only icon flashes during detection.
+                if coordinator.controlsReady {
+                    if let channel = coordinator.stream.channel {
+                        Button {
+                            liveStore.toggleFavorite(channel, columnId: coordinator.stream.columnId ?? AppConfig.liveColumnId)
+                        } label: {
+                            Image(systemName: liveStore.isFavorite(channel) ? "heart.fill" : "heart")
+                                .font(.title3)
+                                .foregroundStyle(liveStore.isFavorite(channel) ? AnyShapeStyle(Theme.brandGradient) : AnyShapeStyle(.white))
+                        }
                     }
-                }
-                if model.hasSubtitles {
-                    Button { model.toggleSubtitles() } label: {
-                        Image(systemName: model.subtitlesOn ? "captions.bubble.fill" : "captions.bubble")
-                            .font(.title3)
-                            .foregroundStyle(model.subtitlesOn ? AnyShapeStyle(Theme.brandGradient) : AnyShapeStyle(.white))
+
+                    if coordinator.hasSubtitles {
+                        Button { coordinator.toggleSubtitles() } label: {
+                            Image(systemName: coordinator.subtitlesOn ? "captions.bubble.fill" : "captions.bubble")
+                                .font(.title3)
+                                .foregroundStyle(coordinator.subtitlesOn ? AnyShapeStyle(Theme.brandGradient) : AnyShapeStyle(.white))
+                        }
                     }
-                }
-                Button { model.fillScreen.toggle() } label: {
-                    Image(systemName: model.fillScreen
-                          ? "arrow.down.right.and.arrow.up.left"
-                          : "arrow.up.left.and.arrow.down.right")
-                        .font(.title3)
+
+                    // AirPlay + PiP are native-engine only (VLC can't feed them).
+                    if coordinator.engine == .native, let native = coordinator.native {
+                        AirPlayRoutePickerView()
+                            .frame(width: 26, height: 26)
+                        if native.pipSupported {
+                            Button { native.togglePiP() } label: {
+                                Image(systemName: "pip.enter").font(.title3)
+                            }
+                        }
+                    }
+
+                    Button { coordinator.toggleFill() } label: {
+                        Image(systemName: coordinator.fillScreen
+                              ? "arrow.down.right.and.arrow.up.left"
+                              : "arrow.up.left.and.arrow.down.right")
+                            .font(.title3)
+                    }
+
+                    if coordinator.showEngineGear {
+                        Button { coordinator.showEngineSheet = true } label: {
+                            Image(systemName: "gearshape.fill").font(.title3)
+                        }
+                    }
                 }
             }
             .foregroundStyle(.white)
@@ -310,5 +542,41 @@ struct PlayerView: View {
             LinearGradient(colors: [.black.opacity(0.6), .clear, .black.opacity(0.6)],
                            startPoint: .top, endPoint: .bottom).ignoresSafeArea()
         )
+    }
+
+    private var engineSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(PlayerEngine.allCases) { option in
+                        Button {
+                            coordinator.select(option)
+                            coordinator.showEngineSheet = false
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.title).foregroundStyle(Theme.textPrimary)
+                                    Text(option.subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
+                                }
+                                Spacer()
+                                if coordinator.engine == option {
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent).fontWeight(.semibold)
+                                }
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("The native player supports AirPlay and Picture in Picture. Some channels stream in a format only the VLC player can decode.")
+                }
+            }
+            .navigationTitle("Player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { coordinator.showEngineSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

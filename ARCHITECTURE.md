@@ -117,9 +117,48 @@ Every POST body (and the `data` field of every response) is encrypted:
 
 ## 7. Playback — `Core/Player/` + `Features/Live/LivePlayback.swift`
 
-**Engine: MobileVLCKit (VLCKitSPM), not AVPlayer.** A subset of channels (the "FHD" variants,
-e.g. `AMC HD`) stream **HEVC inside MPEG‑TS**, which AVFoundation cannot decode (audio‑only). VLC
-decodes both H.264‑ and HEVC‑in‑TS.
+**Two engines, native‑first with automatic fallback.** Every channel starts on **AVPlayer**
+(`NativePlayer.swift`), which gives AirPlay + Picture‑in‑Picture. A subset of channels (the "FHD"
+variants, e.g. `AMC HD`) stream **HEVC inside MPEG‑TS**, which AVFoundation cannot decode (audio
+plays, video stays black). Those fall back to **MobileVLCKit** (VLCKitSPM), which decodes H.264‑
+and HEVC‑in‑TS. **Both engines share `LocalStreamProxy`** — AVPlayer plays the same
+`http://127.0.0.1/<token>.m3u8` URL (the proxy injects the auth headers; segments are open absolute
+URLs the engine fetches directly).
+
+- **`PlaybackCoordinator`** (`PlayerView.swift`, `ObservableObject`) owns both engines and swaps the
+  video surface. It forwards each sub‑model's `objectWillChange` so the shared controls overlay stays
+  in sync. `PlayerModel` = VLC engine (unchanged); `NativePlayerModel` = AVPlayer engine.
+- **`PlaybackSession.shared`** owns the *current* `PlaybackCoordinator` and drives a **root‑level**
+  `fullScreenCover` (`RootTabView`), NOT a per‑tab one. `LivePlayback.play()` resolves the stream and
+  calls `PlaybackSession.present(_:)`; `.livePlayer(playback)` now only carries the PIN prompt + error
+  alert. Presenting at the root (and owning the coordinator outside the view) is what lets **PiP keep
+  floating after the player is closed** and lets the PiP **restore** button re‑present from any tab.
+  Closing the player calls `PlaybackSession.dismiss()`: it keeps the session alive when PiP is active,
+  otherwise tears everything down. PiP closed from its own window ends playback (unless the full UI is
+  showing, where it just returns to inline).
+- **Native‑capability detection** (`NativePlayerModel`): a channel is deemed AVPlayer‑playable when
+  `AVPlayerItem.presentationSize` leaves `.zero` (real frames rendered). It's deemed unsupported when
+  the item `.failed`, `AVPlayerItemFailedToPlayToEndTime` fires, `presentationSize` is still `.zero`
+  ~4 s after `timeControlStatus == .playing` (audio‑only HEVC‑in‑TS), or nothing plays within an 8 s
+  backstop → `onCannotPlayVideo` → coordinator tears down native and creates VLC silently.
+- **Player selector (gear):** a top‑right `gearshape.fill` opens a sheet toggling **Native Player /
+  VLC Player**. It's shown **only when native proved it can play the channel** (`nativeSupported ==
+  true`); for HEVC‑in‑TS channels (native fell back to VLC) the gear is hidden. Switching engines
+  tears down the inactive one (no dual audio) and recreates it on switch‑back.
+- **AirPlay** (`AVRoutePickerView`) and **PiP** (`AVPictureInPictureController` on the
+  `AVPlayerLayer`; the video view's backing layer *is* the `AVPlayerLayer`) appear in the overlay
+  **only for the native engine**. `player.allowsExternalPlayback = true`. The `AVPlayerContainerView`
+  (and thus the layer + PiP controller) is owned by `NativePlayerModel`, not the SwiftUI view, so it
+  survives the player screen being dismissed/re‑presented — required for PiP to persist.
+- **AirPlay + the localhost proxy:** in external‑playback mode the AirPlay receiver *fetches the HLS
+  playlist itself*, so a `127.0.0.1` URL is unreachable from it (symptom: slashed‑play icon on device,
+  nothing on the TV). `NativePlayerModel` KVO‑observes `player.isExternalPlaybackActive` and, when it
+  turns on, reloads the item with the playlist addressed via the device's **Wi‑Fi IP**
+  (`LocalStreamProxy.wifiIPv4Address()`, en0) — reachable by the receiver, which then pulls the open
+  absolute segments from the CDN directly. It swaps back to loopback when AirPlay ends. On‑device
+  playback always uses loopback (no Local Network permission for the common path); the LAN probe on
+  handoff needs `NSLocalNetworkUsageDescription` (in `Info.plist`). AirPlay reloads keep the prior
+  native‑capability verdict (no re‑detection).
 
 How a channel becomes a stream (`ContentService.liveStream(channel:columnId:)`):
 1. `startPlayLive` (with the **correct columnId**) + `getSlbInfo` run concurrently.
@@ -154,8 +193,9 @@ stack). Player URL = `http://127.0.0.1:<port>/<token>.m3u8`.
 On failure it shows an alert with **Refresh** (`refreshAndRetry()` = reload catalog + retry).
 
 **Background audio:** `Info.plist` `UIBackgroundModes: [audio]` + audio session `.playback`. Audio
-continues when backgrounded; there is **no native PiP/AirPlay** (VLC can't feed them — this was
-explored with KSPlayer and FFmpeg‑iOS and abandoned).
+continues when backgrounded. **Native PiP/AirPlay work on the AVPlayer engine** (the audio background
+mode also covers PiP); on the VLC engine (HEVC‑in‑TS channels) only background audio + screen
+mirroring are available — VLC still can't feed PiP/AirPlay.
 
 ## 8. Catalog data & caching — `Core/Services/LiveStore.swift`
 
@@ -225,7 +265,8 @@ parental icons, PIN dots. App display name / splash / icon are all "Channels"
 
 ## 13. Known limitations
 
-- No native PiP / AirPlay video (VLC constraint; only background audio + screen mirroring).
+- Native PiP / AirPlay work on AVPlayer‑playable channels; HEVC‑in‑TS channels fall back to VLC,
+  where only background audio + screen mirroring are available.
 - VOD (movies/shows) not supported (proprietary P2P delivery).
 - Shared single‑device account: one active session at a time.
 - `Info.plist` sets `NSAllowsArbitraryLoads` (the live CDN + local proxy are cleartext HTTP).

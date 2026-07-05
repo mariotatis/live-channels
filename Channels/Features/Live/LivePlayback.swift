@@ -14,7 +14,6 @@ import Observation
 @MainActor
 @Observable
 final class LivePlayback {
-    var playerStream: PlayableStream?
     var loadingChannelCode: String?
     var errorMessage: String?
     var isRefreshing = false
@@ -64,7 +63,8 @@ final class LivePlayback {
         errorMessage = nil
         defer { loadingChannelCode = nil }
         do {
-            playerStream = try await ContentService.shared.liveStream(channel: channel, columnId: columnId)
+            let stream = try await ContentService.shared.liveStream(channel: channel, columnId: columnId)
+            PlaybackSession.shared.present(stream)
         } catch {
             errorMessage = "Couldn’t start \(channel.displayName). The channel list may be out of date — tap Refresh to reload it."
         }

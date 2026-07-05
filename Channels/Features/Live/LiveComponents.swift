@@ -18,7 +18,14 @@ struct ChannelGridView: View {
     @Bindable var playback: LivePlayback
     var columnIdFor: (Channel) -> Int = { _ in AppConfig.liveColumnId }
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
+    /// Landscape (vertical size class `.compact` on iPhone) fits twice as many
+    /// columns as portrait.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var columns: [GridItem] {
+        let count = verticalSizeClass == .compact ? 6 : 3
+        return Array(repeating: GridItem(.flexible(), spacing: 10), count: count)
+    }
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 12) {
@@ -38,7 +45,9 @@ struct ChannelGridView: View {
 }
 
 extension View {
-    /// Attaches the full-screen player cover and the playback-error alert.
+    /// Attaches the PIN prompt and the playback-error alert. The full-screen
+    /// player itself is presented app-wide from PlaybackSession (see RootTabView)
+    /// so Picture in Picture can outlive any single tab.
     func livePlayer(_ playback: LivePlayback) -> some View {
         modifier(LivePlayerModifier(playback: playback))
     }
@@ -49,9 +58,6 @@ private struct LivePlayerModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .fullScreenCover(item: $playback.playerStream) { stream in
-                PlayerView(stream: stream)
-            }
             .sheet(item: $playback.pinRequest) { request in
                 NavigationStack {
                     PinEntryView(title: request.channel.displayName,

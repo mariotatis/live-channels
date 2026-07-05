@@ -28,13 +28,41 @@ final class LocalStreamProxy: @unchecked Sendable {
 
     private init() {}
 
-    /// Register a live playlist and return a local URL VLC can play.
-    func localURL(for url: URL, headers: [String: String]) async -> URL? {
+    /// Register a live playlist and return a local URL a player can play.
+    ///
+    /// `preferLAN` addresses the playlist via the device's Wi-Fi IP instead of
+    /// `127.0.0.1`. That's required for **AirPlay**: in external-playback mode the
+    /// AirPlay receiver (e.g. Apple TV) fetches the HLS playlist itself and can't
+    /// reach the phone's loopback. On-device playback keeps using loopback (no
+    /// Local Network permission needed). Falls back to loopback if no Wi-Fi IP.
+    func localURL(for url: URL, headers: [String: String], preferLAN: Bool = false) async -> URL? {
         await ensureReady()
         guard port != 0 else { return nil }
         let token = UUID().uuidString
         lock.lock(); entries[token] = (url, headers); lock.unlock()
-        return URL(string: "http://127.0.0.1:\(port)/\(token).m3u8")
+        let host = (preferLAN ? Self.wifiIPv4Address() : nil) ?? "127.0.0.1"
+        return URL(string: "http://\(host):\(port)/\(token).m3u8")
+    }
+
+    /// The device's Wi-Fi (en0) IPv4 address, if connected — reachable by other
+    /// devices on the same network (the AirPlay receiver).
+    static func wifiIPv4Address() -> String? {
+        var address: String?
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            let flags = Int32(interface.ifa_flags)
+            guard (flags & (IFF_UP | IFF_RUNNING | IFF_LOOPBACK)) == (IFF_UP | IFF_RUNNING),
+                  interface.ifa_addr.pointee.sa_family == UInt8(AF_INET),
+                  String(cString: interface.ifa_name) == "en0" else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                        &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            address = String(cString: host)
+        }
+        return address
     }
 
     // MARK: - Listener lifecycle
