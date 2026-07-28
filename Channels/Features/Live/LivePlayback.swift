@@ -46,11 +46,13 @@ final class LivePlayback: ObservableObject {
         Task { await start(request.channel, columnId: request.columnId) }
     }
 
-    /// Refresh the (possibly stale) catalog, then retry the last channel.
+    /// Clean refresh (reclaim the active-device session + reload the catalog),
+    /// then retry the last channel. Reclaiming matters because the usual cause of
+    /// a failure here is another device having taken the shared session.
     func refreshAndRetry() async {
         isRefreshing = true
         errorMessage = nil
-        await LiveStore.shared.load()
+        await LiveStore.shared.refresh()
         isRefreshing = false
         if let attempt = lastAttempt {
             await start(attempt.channel, columnId: attempt.columnId)

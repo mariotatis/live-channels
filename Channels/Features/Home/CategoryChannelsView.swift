@@ -49,9 +49,17 @@ struct CategoryChannelsView: View {
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
         .mooveesBackground()
-        .task(id: locked) {
-            guard !locked, channels.isEmpty else { return }
-            channels = await store.channels(for: category)
+        // Re-pull when unlocked *or* after a catalog refresh (generation bump), so
+        // the refresh button reloads this category's channels too — not just Home.
+        .task(id: "\(locked)-\(store.generation)") {
+            guard !locked else { return }
+            // If we already had channels, this run was triggered by a refresh →
+            // force a re-fetch; otherwise serve the cache. Either way, never wipe
+            // a good list when the (re)fetch comes back empty (transient).
+            let isRefresh = !channels.isEmpty
+            if channels.isEmpty { isLoading = true }
+            let fresh = await store.channels(for: category, forceRefresh: isRefresh)
+            if !fresh.isEmpty || channels.isEmpty { channels = fresh }
             isLoading = false
         }
         .livePlayer(playback)

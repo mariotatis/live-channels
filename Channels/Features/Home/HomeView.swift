@@ -21,9 +21,13 @@ struct HomeView: View {
                 .navigationTitle("Live Channels")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button { Task { await store.load() } } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .foregroundStyle(.white)
+                        Button { Task { await store.refresh() } } label: {
+                            if store.isLoading {
+                                ProgressView().tint(.white)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .foregroundStyle(.white)
+                            }
                         }
                         .accessibilityLabel("Refresh")
                         .disabled(store.isLoading)

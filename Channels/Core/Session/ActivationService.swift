@@ -68,6 +68,30 @@ final class ActivationService: ObservableObject {
         }
     }
 
+    /// Reclaim the single active-device slot without dropping to the splash
+    /// screen. The account shares one `sn` across devices, so opening the app on
+    /// another device steals this one's session and its calls start coming back
+    /// empty — exactly the state a kill-and-reopen fixes. A "clean" refresh runs
+    /// this first so THIS device becomes active again, then reloads. On failure it
+    /// silently keeps the current session (the catalog reload surfaces any error).
+    func reclaim() async {
+        guard let activeData = try? await PortalClient.shared.call(
+                .active, params: DeviceFingerprint.activeBody(), as: ActiveData.self),
+              let uid = activeData.userId, let token = activeData.userToken,
+              let portal = activeData.portalCodeList?.first?.portalCode
+        else { return }
+        let newSession = Session(sn: AppConfig.capturedSn, snToken: nil,
+                                 userId: uid, userToken: token, portalCode: portal,
+                                 playlistUrl: activeData.playlistUrl,
+                                 heartBeatTime: activeData.heartBeatTime.flatMap { Int($0) },
+                                 restrictedStatus: activeData.restrictedStatus,
+                                 hasPay: activeData.hasPay, remainingDays: activeData.remainingDays,
+                                 customer: activeData.customer, tips: activeData.tips)
+        persist(newSession)
+        state = .active(newSession)   // same case as before → no splash flash
+        startHeartbeat()
+    }
+
     /// Translates known backend responses into a clear explanation.
     static func friendlyMessage(for error: Error) -> String {
         let raw = (error as? PortalError)?.errorDescription ?? "\(error)"

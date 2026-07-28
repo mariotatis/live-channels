@@ -38,6 +38,10 @@ final class LiveStore: ObservableObject {
 
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// Bumped on every successful catalog (re)load. Views that cache channels
+    /// locally (category grids) key their fetch on this so a refresh actually
+    /// re-pulls everything, not just the top-level list.
+    @Published private(set) var generation = 0
 
     // MARK: Favorites (local only)
     @Published private(set) var favorites: [FavoriteChannel] = []
@@ -67,6 +71,14 @@ final class LiveStore: ObservableObject {
     /// the error is surfaced, and how long to wait between attempts.
     private static let autoRetries = 1
     private static let autoRetryDelay: UInt64 = 2_000_000_000   // 2s in nanoseconds
+
+    /// A "clean" refresh, equivalent to killing & reopening the app: reclaim the
+    /// active-device session (another device on the shared `sn` may have taken it,
+    /// which makes calls come back empty) and then reload the catalog.
+    func refresh() async {
+        await ActivationService.shared.reclaim()
+        await load()
+    }
 
     /// Fetch the catalog from the network. Also used by pull-to-refresh.
     ///
@@ -98,7 +110,12 @@ final class LiveStore: ObservableObject {
                 }
                 allChannels = channels
                 categories = (try? await ContentService.shared.liveCategories()) ?? []
-                categoryChannels = [:]        // fresh — per-category lists reload lazily
+                // Keep the per-category cache as a fallback (the portal often
+                // returns an empty per-category list on the single-device
+                // transient right after a refresh — wiping it would show
+                // "No Channels"). Open category views re-fetch via `generation`
+                // and only replace their cache on a non-empty result.
+                generation += 1
                 return
             } catch {
                 if isLastAttempt {
@@ -112,12 +129,22 @@ final class LiveStore: ObservableObject {
 
     /// Channels for a given category column, loaded lazily and kept in memory
     /// for the process lifetime (so revisiting a category doesn't refetch).
-    func channels(for category: LiveColumn) async -> [Channel] {
-        if let cached = categoryChannels[category.id] { return cached }
-        let list = (try? await ContentService.shared.liveChannels(columnId: category.id)) ?? []
-        guard !list.isEmpty else { return list }   // don't retain a transient empty result
-        categoryChannels[category.id] = list
-        return list
+    ///
+    /// An empty result is almost always the single-active-device transient (worse
+    /// right after a catalog refresh, when calls come back-to-back), so retry once
+    /// before giving up. Empty results are never cached.
+    func channels(for category: LiveColumn, forceRefresh: Bool = false) async -> [Channel] {
+        let cached = categoryChannels[category.id]
+        if let cached, !forceRefresh { return cached }
+        for attempt in 0...1 {
+            let list = (try? await ContentService.shared.liveChannels(columnId: category.id)) ?? []
+            if !list.isEmpty {
+                categoryChannels[category.id] = list
+                return list
+            }
+            if attempt == 0 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+        }
+        return cached ?? []   // keep the last good list if the (re)fetch came back empty
     }
 
     // MARK: - Favorites

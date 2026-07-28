@@ -122,8 +122,11 @@ Every POST body (and the `data` field of every response) is encrypted:
 - **Heartbeat:** after activation a background task calls `v5/heartbeat` on `heartBeatTime`; a
   server auth error triggers a silent re‑activation.
 - **Single active device:** the account allows one active session at a time on the shared `sn`.
-  Concurrent activations (e.g. dev tooling hitting the API) transiently invalidate the app's session
-  and cause empty catalog loads — a data/env quirk, not a bug.
+  Opening the app on another device (phone → iPad) steals this device's session, after which its
+  calls come back empty until a kill‑and‑reopen re‑activates. `reclaim()` reproduces that re‑activation
+  **without** flipping `state` to `.activating` (so it doesn't drop to the splash screen), and
+  `LiveStore.refresh()` = `reclaim()` + `load()`. The Home **refresh** button and the playback‑error
+  **Refresh** call `refresh()`, so a refresh reclaims the active slot (clean data), not just re‑hits the API.
 
 ## 7. Playback — `Core/Player/` + `Features/Live/LivePlayback.swift`
 
