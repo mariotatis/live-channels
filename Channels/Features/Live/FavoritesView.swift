@@ -24,7 +24,7 @@ struct FavoritesView: View {
     @ViewBuilder
     private var content: some View {
         if store.isLoading && store.allChannels.isEmpty {
-            LoadingView()
+            LoadingView(message: "Loading Channels…")
         } else if store.favoriteChannels.isEmpty {
             EmptyStateView(icon: "heart",
                            title: "No Favorites Yet",

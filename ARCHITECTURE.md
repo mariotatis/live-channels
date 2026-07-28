@@ -211,12 +211,12 @@ mirroring are available — VLC still can't feed PiP/AirPlay.
 
 `LiveStore.shared` (`ObservableObject`) is the single source of truth for Home/Channels/Favorites:
 - `allChannels` (getLiveData 76182), `categories` (getColumnContents 76175 → `[LiveColumn]`),
-  `categoryChannels` (lazy per‑category getLiveData, cached).
-- **Disk cache, 48h TTL:** the whole catalog is written to
-  `Library/Caches/live_catalog_cache.json` (`CatalogCache{timestamp, allChannels, categories,
-  categoryChannels}`). `loadIfNeeded()` serves from cache instantly on cold start if < 48h; `load()`
-  (also pull‑to‑refresh) refetches and rewrites. **Empty results are never cached** (guards against
-  the single‑device transient).
+  `categoryChannels` (lazy per‑category getLiveData, memoized in memory).
+- **In‑memory only, per session (no disk cache):** the catalog is held on the `LiveStore.shared`
+  singleton for the lifetime of the app *process*. `loadIfNeeded()` fetches from the network once
+  (guard: `allChannels.isEmpty`), so returning from a category doesn't refetch; a fresh process (app
+  killed & relaunched, or reclaimed by the system) reloads. `load()` (also pull‑to‑refresh) refetches
+  on demand. **Empty results are never retained** (guards against the single‑device transient).
 - **Favorites** (local): `FavoriteChannel {channel, columnId}` persisted as JSON in UserDefaults
   (`live.favorites.v2`) — stores the full channel + its columnId so category‑only favorites still
   play and display.
@@ -276,7 +276,7 @@ subtitle icons, PIN dots. App display name / splash / icon are all "Channels"
 
 - **New portal call:** add the path to `Endpoints.swift`, a `Decodable` result model, and a method on
   `ContentService` calling `PortalClient.shared.call(...)`. Common params + crypto + session are automatic.
-- **New live‑data surface:** extend `LiveStore` (respect the disk cache + never cache empty).
+- **New live‑data surface:** extend `LiveStore` (in‑memory per‑session state + never retain empty).
 - **New player capability:** edit `PlayerView`/`LivePlayback`. Remember VLC delegate callbacks are
   off‑main; auth headers only work on the m3u8 via `LocalStreamProxy`.
 - **Config/secret change:** `AppConfig.swift`.

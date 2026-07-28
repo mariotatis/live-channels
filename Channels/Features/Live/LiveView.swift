@@ -109,7 +109,7 @@ struct LiveView: View {
     @ViewBuilder
     private func channelList(trackScroll: Bool) -> some View {
         if store.isLoading && store.allChannels.isEmpty {
-            LoadingView()
+            LoadingView(message: "Loading Channels…")
         } else if let errorMessage = store.errorMessage, store.allChannels.isEmpty {
             ErrorView(message: errorMessage) { Task { await store.load() } }
         } else {

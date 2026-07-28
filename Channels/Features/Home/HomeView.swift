@@ -47,7 +47,7 @@ struct HomeView: View {
     @ViewBuilder
     private var content: some View {
         if store.isLoading && store.categories.isEmpty {
-            LoadingView()
+            LoadingView(message: "Loading Channels…")
         } else if let errorMessage = store.errorMessage, store.categories.isEmpty {
             ErrorView(message: errorMessage) { Task { await store.load() } }
         } else {

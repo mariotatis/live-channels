@@ -43,10 +43,19 @@ struct PosterImage: View {
 // MARK: - State views
 
 struct LoadingView: View {
+    var message: String? = nil
+
     var body: some View {
-        ProgressView().tint(Theme.accent)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .mooveesBackground()
+        VStack(spacing: 16) {
+            ProgressView().tint(Theme.accent)
+            if let message {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .mooveesBackground()
     }
 }
 

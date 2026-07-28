@@ -9,8 +9,10 @@
 //   • locally-persisted favorites (full channel + its source columnId, so
 //     category-only channels like 18+ can be played back correctly)
 //
-//  Catalog data is cached to disk for 48h: a cold launch loads instantly from
-//  cache; pull-to-refresh refetches from the network and rewrites the cache.
+//  Catalog data lives in memory for the lifetime of the app process: it is
+//  fetched once on first appearance and kept as-is across navigation. A fresh
+//  process (app killed & relaunched, or reclaimed by the system) reloads from
+//  the network. Pull-to-refresh refetches on demand.
 //
 
 import Foundation
@@ -44,15 +46,6 @@ final class LiveStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private let favKey = "live.favorites.v2"
 
-    // MARK: Cache
-    private let cacheTTL: TimeInterval = 48 * 60 * 60   // 48 hours
-    private var cacheTimestamp: Date?
-
-    private var cacheURL: URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("live_catalog_cache.json")
-    }
-
     private init() {
         if let data = defaults.data(forKey: favKey),
            let decoded = try? JSONDecoder().decode([FavoriteChannel].self, from: data) {
@@ -63,82 +56,68 @@ final class LiveStore: ObservableObject {
 
     // MARK: - Loading
 
-    /// Used on first appearance: serve from a fresh disk cache if present,
-    /// otherwise fetch from the network.
+    /// Used on first appearance: fetch from the network once. Once the catalog
+    /// is in memory this is a no-op, so returning from a category doesn't reload.
     func loadIfNeeded() async {
         guard allChannels.isEmpty, !isLoading else { return }
-        if loadFromCache() { return }
         await load()
     }
 
-    /// Fetch the catalog from the network and rewrite the cache. Also used by
-    /// pull-to-refresh (which discards any cached data by fetching anew).
+    /// How many times a failed/empty catalog fetch is silently retried before
+    /// the error is surfaced, and how long to wait between attempts.
+    private static let autoRetries = 1
+    private static let autoRetryDelay: UInt64 = 2_000_000_000   // 2s in nanoseconds
+
+    /// Fetch the catalog from the network. Also used by pull-to-refresh.
+    ///
+    /// An empty body or a thrown error on first attempt is almost always the
+    /// single-active-device transient (the shared `sn` session is briefly held
+    /// elsewhere) — it clears on a retry. So we retry silently after a short
+    /// wait, keeping the spinner up, and only surface the error if the retry
+    /// also fails. This masks the flicker of an error the user would otherwise
+    /// just have to tap "Try Again" to clear.
     func load() async {
+        guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-        do {
-            // Sequential (not concurrent): the account allows one active device
-            // session at a time, so back-to-back calls are more reliable.
-            let channels = try await ContentService.shared.liveChannels()
-            guard !channels.isEmpty else {
-                errorMessage = "Couldn’t load channels. Pull to refresh to try again."
+
+        for attempt in 0...Self.autoRetries {
+            let isLastAttempt = attempt == Self.autoRetries
+            do {
+                // Sequential (not concurrent): the account allows one active
+                // device session at a time, so back-to-back calls are more reliable.
+                let channels = try await ContentService.shared.liveChannels()
+                guard !channels.isEmpty else {
+                    if isLastAttempt {
+                        errorMessage = "Couldn’t load channels. Pull to refresh to try again."
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: Self.autoRetryDelay)
+                    continue
+                }
+                allChannels = channels
+                categories = (try? await ContentService.shared.liveCategories()) ?? []
+                categoryChannels = [:]        // fresh — per-category lists reload lazily
                 return
+            } catch {
+                if isLastAttempt {
+                    errorMessage = error.localizedDescription
+                    return
+                }
+                try? await Task.sleep(nanoseconds: Self.autoRetryDelay)
             }
-            allChannels = channels
-            categories = (try? await ContentService.shared.liveCategories()) ?? []
-            categoryChannels = [:]           // fresh — per-category lists reload lazily
-            cacheTimestamp = Date()
-            saveCache()                      // only cache a non-empty catalog
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
-    /// Channels for a given category column, loaded lazily and cached (memory +
-    /// disk, so counts and lists survive an app relaunch within the TTL).
+    /// Channels for a given category column, loaded lazily and kept in memory
+    /// for the process lifetime (so revisiting a category doesn't refetch).
     func channels(for category: LiveColumn) async -> [Channel] {
         if let cached = categoryChannels[category.id] { return cached }
         let list = (try? await ContentService.shared.liveChannels(columnId: category.id)) ?? []
-        guard !list.isEmpty else { return list }   // don't cache a transient empty result
+        guard !list.isEmpty else { return list }   // don't retain a transient empty result
         categoryChannels[category.id] = list
-        saveCache()
         return list
-    }
-
-    // MARK: - Disk cache
-
-    private struct CatalogCache: Codable {
-        var timestamp: Date
-        var allChannels: [Channel]
-        var categories: [LiveColumn]
-        var categoryChannels: [Int: [Channel]]
-    }
-
-    /// Loads catalog state from disk if the cache exists and is < 48h old.
-    @discardableResult
-    private func loadFromCache() -> Bool {
-        guard let data = try? Data(contentsOf: cacheURL),
-              let cache = try? JSONDecoder().decode(CatalogCache.self, from: data),
-              !cache.allChannels.isEmpty,
-              Date().timeIntervalSince(cache.timestamp) < cacheTTL else {
-            return false
-        }
-        allChannels = cache.allChannels
-        categories = cache.categories
-        categoryChannels = cache.categoryChannels
-        cacheTimestamp = cache.timestamp
-        return true
-    }
-
-    private func saveCache() {
-        let cache = CatalogCache(timestamp: cacheTimestamp ?? Date(),
-                                 allChannels: allChannels,
-                                 categories: categories,
-                                 categoryChannels: categoryChannels)
-        if let data = try? JSONEncoder().encode(cache) {
-            try? data.write(to: cacheURL, options: .atomic)
-        }
     }
 
     // MARK: - Favorites
