@@ -48,6 +48,29 @@ extension View {
         }
     }
 
+    /// Constrains a sheet to a fraction of the screen height on iOS 16+ (with a
+    /// drag-up-to-full affordance); full-height on iOS 15.
+    @ViewBuilder
+    func fractionDetentIfAvailable(_ fraction: CGFloat) -> some View {
+        if #available(iOS 16.0, *) {
+            self.presentationDetents([.fraction(fraction), .large])
+        } else {
+            self
+        }
+    }
+
+    /// Gives a sheet a translucent "liquid glass" backing (the content behind it
+    /// shows through, blurred) on iOS 16.4+; the opaque system default on iOS 15.
+    /// Pair with a non-opaque content background so the material is visible.
+    @ViewBuilder
+    func liquidGlassSheet() -> some View {
+        if #available(iOS 16.4, *) {
+            self.presentationBackground(.ultraThinMaterial)
+        } else {
+            self
+        }
+    }
+
     /// Safari-style chrome hiding driven by scroll offset. Available iOS 18+
     /// (`onScrollGeometryChange`); a no-op on older systems, where the navigation
     /// bar simply stays visible.

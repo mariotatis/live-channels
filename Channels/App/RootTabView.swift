@@ -17,13 +17,10 @@ struct RootTabView: View {
         HomeView()
             .tint(Theme.accent)
             .fullScreenCover(isPresented: $playbackSession.isPresenting) {
-                if let coordinator = playbackSession.coordinator {
-                    // .id ties the view to the coordinator: swapping to a new
-                    // channel (new coordinator) rebuilds the video surface
-                    // instead of reusing the torn-down one (which shows black).
-                    PlayerView(coordinator: coordinator)
-                        .id(ObjectIdentifier(coordinator))
-                }
+                // PlayerView observes the session and renders the mosaic itself;
+                // each video surface is keyed by its own coordinator so swapping a
+                // channel rebuilds that surface instead of reusing a torn-down one.
+                PlayerView()
             }
             // Floating mini player: shown when the full-screen player has been
             // minimized (and system PiP isn't already floating the video).

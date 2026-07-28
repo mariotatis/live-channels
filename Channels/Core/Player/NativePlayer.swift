@@ -38,6 +38,9 @@ final class NativePlayerModel: NSObject, ObservableObject {
     let stream: PlayableStream
     let player = AVPlayer()
 
+    /// Multiview audio focus: mute/unmute this player.
+    func setMuted(_ value: Bool) { player.isMuted = value }
+
     /// The rendering surface. Owned by the model (NOT the SwiftUI view) so its
     /// AVPlayerLayer — and the PiP controller bound to it — survive the player
     /// screen being dismissed. That's what lets PiP keep floating while the user
@@ -105,6 +108,10 @@ final class NativePlayerModel: NSObject, ObservableObject {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
     }
+
+    /// User-triggered refresh: restart the current stream from scratch (channel
+    /// stalled/paused on a network hiccup). Keeps the prior capability verdict.
+    func reload() { Task { await load(detect: false) } }
 
     /// Loads (or reloads) the stream. `preferLAN` addresses the playlist via the
     /// Wi-Fi IP so an AirPlay receiver can fetch it; `detect` arms native-capability

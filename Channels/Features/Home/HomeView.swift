@@ -21,6 +21,14 @@ struct HomeView: View {
                 .navigationTitle("Live Channels")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { Task { await store.load() } } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(.white)
+                        }
+                        .accessibilityLabel("Refresh")
+                        .disabled(store.isLoading)
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button { showFavorites = true } label: {
                             Image(systemName: "heart")
                                 .foregroundStyle(.white)
@@ -68,7 +76,6 @@ struct HomeView: View {
             }
             .listStyle(.plain)
             .clearListBackground()
-            .refreshable { await store.load() }
         }
     }
 }

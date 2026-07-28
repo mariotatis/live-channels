@@ -164,15 +164,43 @@ URLs the engine fetches directly).
   `NativePlayerModel.playerView`, so moving it doesn't drop the video output; (2) `PlayerView` and
   `MiniPlayerView` are tagged `.id(ObjectIdentifier(coordinator))` in `RootTabView`, so swapping to a
   new channel (new coordinator) rebuilds the video surface instead of reusing the torn‑down one.
+- **Multiview mosaic** (up to `PlaybackSession.maxTiles` = 4 channels at once): `tiles` is an array of
+  `PlaybackCoordinator`, `activeIndex` marks the audio‑focused tile (the others are muted via
+  `PlaybackCoordinator.setMuted` → `PlayerModel`/`NativePlayerModel`). The player's **"+"** button (left
+  of the favorite heart) opens `AddChannelSheet` (a 3/4‑height sheet of the same channel grid); picking a
+  channel resolves its stream and calls `addChannel(_:)`, which appends a new tile as the audio focus.
+  Existing tiles are left untouched (each keeps whatever engine it resolved to) — switching their engine
+  on add re‑initialised the player and left the previous channel black. **VLC is the default engine
+  everywhere** (`present`/`addChannel` use `startOn: .vlc`, mini too); the player‑selector gear is
+  always shown so the user can opt into the native engine for AirPlay/PiP. The
+  `AddChannelSheet` uses a translucent **liquid‑glass** backing (`presentationBackground(.ultraThinMaterial)`
+  via `liquidGlassSheet()`), matching the engine‑selector sheet. VLC tiles stop off the main
+  thread on teardown (`VLCMediaPlayer.stop()` is a synchronous, thread‑joining call that otherwise
+  freezes the UI when several tiles close at once). `PlayerView` renders the mosaic: **stacked vertically in portrait, side‑by‑
+  side (≤2) or a 2×2 grid (3–4) in landscape** (keyed off `verticalSizeClass`), each tile an equal share.
+  Tapping a tile (`setActive`) moves audio + the accent border to it; the shared top bar (title,
+  favorite, subtitles, fill, engine) always acts on the focused tile; each tile has its own remove "×".
+  `minimize()` keeps the whole mosaic **alive** (the other tiles keep playing, muted) and the mini
+  player just *shows* the focused channel; picking a channel while minimized (`present` →
+  `replaceActiveTile`) swaps only the focused tile, so expanding restores the full grid with just that
+  channel changed. The controls bar's darkening gradient is `.allowsHitTesting(false)` so tile taps
+  aren't swallowed. A top‑bar **refresh** button (`arrow.clockwise`, left of the gear) calls
+  `PlaybackCoordinator.reload()` to reconnect the focused channel on demand.
+- **Stall auto‑recovery** (`PlayerModel`, VLC): a watchdog reconnects a stream that froze / quietly
+  paused / dropped mid‑playback without the user closing & reopening. `handleTimeChanged` stamps
+  `lastProgressAt`; a 1 s poll reconnects if no frames advanced for `stallTimeout` (4 s) while playing,
+  and `.error`/`.ended`/`.stopped` reconnect immediately once `hasStarted`. Attempts are capped
+  (`maxAutoRecover` = 3, reset on any successful progress) so a dead channel surfaces an error instead
+  of looping. (There is no manual pause in the UI, so any pause is treated as involuntary.)
 - **Native‑capability detection** (`NativePlayerModel`): a channel is deemed AVPlayer‑playable when
   `AVPlayerItem.presentationSize` leaves `.zero` (real frames rendered). It's deemed unsupported when
   the item `.failed`, `AVPlayerItemFailedToPlayToEndTime` fires, `presentationSize` is still `.zero`
   ~4 s after `timeControlStatus == .playing` (audio‑only HEVC‑in‑TS), or nothing plays within an 8 s
   backstop → `onCannotPlayVideo` → coordinator tears down native and creates VLC silently.
 - **Player selector (gear):** a top‑right `gearshape.fill` opens a sheet toggling **Native Player /
-  VLC Player**. It's shown **only when native proved it can play the channel** (`nativeSupported ==
-  true`); for HEVC‑in‑TS channels (native fell back to VLC) the gear is hidden. Switching engines
-  tears down the inactive one (no dual audio) and recreates it on switch‑back.
+  VLC Player**. Playback defaults to VLC, so the gear is **always shown** — it's how the user opts into
+  the native engine (AirPlay / PiP). Switching engines tears down the inactive one (no dual audio) and
+  recreates it on switch‑back.
 - **AirPlay** (`AVRoutePickerView`) and **PiP** (`AVPictureInPictureController` on the
   `AVPlayerLayer`; the video view's backing layer *is* the `AVPlayerLayer`) appear in the overlay
   **only for the native engine**. `player.allowsExternalPlayback = true`. The `AVPlayerContainerView`

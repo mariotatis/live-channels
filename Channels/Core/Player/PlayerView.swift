@@ -34,6 +34,23 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
     private var hasStarted = false
     private var didTeardown = false
     private var timeoutTask: Task<Void, Never>?
+    /// Desired mute state (multiview: only the focused tile is unmuted). Kept so
+    /// it can be re-applied after each (re)load, since VLC resets audio on play.
+    private var muted = false
+
+    // MARK: Stall auto-recovery
+    /// Watchdog that reconnects a stream that froze/paused/dropped mid-playback
+    /// (network hiccup) without the user having to close & reopen the channel.
+    private var watchdog: Task<Void, Never>?
+    /// When frames last advanced. If this goes stale while we should be playing,
+    /// the stream has stalled and we reconnect.
+    private var lastProgressAt = Date()
+    /// Auto-reconnect attempts since the last successful playback; capped so a
+    /// genuinely dead channel eventually surfaces an error instead of looping.
+    private var autoRecoverCount = 0
+    private let maxAutoRecover = 3
+    /// No new frames for this long (while playing) ⇒ treat as stalled.
+    private let stallTimeout: TimeInterval = 4
 
     init(stream: PlayableStream) {
         self.stream = stream
@@ -52,9 +69,11 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
-    /// Retry the current stream (e.g. after a transient CDN failure).
+    /// Retry the current stream (user-triggered, e.g. the refresh button). Clears
+    /// the auto-recovery budget since this is a deliberate fresh start.
     func reload() {
         guard let source = stream.primary else { return }
+        autoRecoverCount = 0
         Task { await load(source) }
     }
 
@@ -62,6 +81,7 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
         errorMessage = nil
         isBuffering = true
         hasStarted = false
+        lastProgressAt = Date()
 
         guard let local = await LocalStreamProxy.shared.localURL(for: source.url, headers: source.headers) else {
             errorMessage = "Couldn’t start playback. Please try again."
@@ -72,7 +92,9 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
         media.addOption(":network-caching=1500")
         mediaPlayer.media = media
         mediaPlayer.play()
+        mediaPlayer.audio?.isMuted = muted
         isPlaying = true
+        startWatchdog()
 
         timeoutTask?.cancel()
         timeoutTask = Task { [weak self] in
@@ -81,6 +103,52 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
             self.errorMessage = "Couldn’t start playback — this channel may be temporarily unavailable."
             self.isBuffering = false
         }
+    }
+
+    // MARK: Stall auto-recovery
+
+    /// Silent reconnect after a mid-playback stall/drop, up to `maxAutoRecover`
+    /// attempts; past that, surface the error instead of looping forever.
+    private func autoRecover() {
+        guard !didTeardown, let source = stream.primary else { return }
+        guard autoRecoverCount < maxAutoRecover else {
+            errorMessage = "This channel can’t be played right now."
+            isBuffering = false
+            return
+        }
+        autoRecoverCount += 1
+        isBuffering = true
+        lastProgressAt = Date()
+        Task { await load(source) }
+    }
+
+    /// Recover from an interruption (error/ended/stopped) only if we'd actually
+    /// been playing and aren't already showing an error / tearing down.
+    private func recoverIfInterrupted() {
+        guard !didTeardown, hasStarted, errorMessage == nil else { return }
+        autoRecover()
+    }
+
+    /// Poll for a frozen stream: if frames stopped advancing (or VLC quietly
+    /// paused) for `stallTimeout` while we should be playing, reconnect.
+    private func startWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self else { return }
+                guard !self.didTeardown, self.hasStarted, self.errorMessage == nil else { continue }
+                if Date().timeIntervalSince(self.lastProgressAt) > self.stallTimeout {
+                    self.autoRecover()
+                }
+            }
+        }
+    }
+
+    /// Multiview audio focus: mute/unmute this player. Re-applied on each load.
+    func setMuted(_ value: Bool) {
+        muted = value
+        mediaPlayer.audio?.isMuted = value
     }
 
     func togglePlay() {
@@ -136,22 +204,33 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
 
     private func handleStateChanged() {
         switch mediaPlayer.state {
-        case .error:
-            errorMessage = "This channel can’t be played right now."
-            isBuffering = false
         case .playing:
             errorMessage = nil
+            isPlaying = true
         case .paused:
+            // No manual pause exists in the UI, so a pause is involuntary — but
+            // let the watchdog confirm it's really stuck before reconnecting.
             isPlaying = false
+        case .error:
+            if hasStarted {
+                recoverIfInterrupted()          // dropped mid-playback → reconnect
+            } else {
+                errorMessage = "This channel can’t be played right now."
+                isBuffering = false
+            }
+        case .ended, .stopped:
+            recoverIfInterrupted()              // live shouldn't end → reconnect
         default:
             break
         }
     }
 
     private func handleTimeChanged() {
-        // Real frames are flowing → we've started.
+        // Real frames are flowing → we've started (and playback is healthy).
         hasStarted = true
         isBuffering = false
+        lastProgressAt = Date()
+        autoRecoverCount = 0
         if errorMessage != nil { errorMessage = nil }
         if !isPlaying { isPlaying = mediaPlayer.isPlaying }
         refreshSubtitles()
@@ -163,9 +242,18 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
     func teardown() {
         guard !didTeardown else { return }
         didTeardown = true
+        watchdog?.cancel(); watchdog = nil
         timeoutTask?.cancel(); timeoutTask = nil
         mediaPlayer.delegate = nil
-        mediaPlayer.stop()
+        mediaPlayer.drawable = nil
+        // VLCMediaPlayer.stop() is synchronous and can block the main thread
+        // (it joins the decode/output threads). Tearing down several tiles at
+        // once that way freezes the UI when closing the player, so stop off the
+        // main thread; the closure retains the player until stop() returns.
+        let player = mediaPlayer
+        DispatchQueue.global(qos: .userInitiated).async {
+            player.stop()
+        }
     }
 }
 
@@ -269,10 +357,11 @@ enum PlayerEngine: String, CaseIterable, Identifiable {
     }
 }
 
-/// Owns the two playback engines and switches between them. Every channel starts
-/// on the native (AVPlayer) engine; if it can't render video (HEVC-in-TS) we fall
-/// back to VLC automatically. The player-selector gear is only offered once the
-/// native engine has proven it can play the channel (`nativeSupported == true`).
+/// Owns the two playback engines and switches between them. Channels default to
+/// the VLC engine (broadest codec support); the user can opt into the native
+/// (AVPlayer) engine from the always-available player-selector gear to get
+/// AirPlay / Picture in Picture. If the native engine can't render a channel
+/// (HEVC-in-TS) it falls back to VLC automatically.
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
     let stream: PlayableStream
@@ -322,7 +411,9 @@ final class PlaybackCoordinator: ObservableObject {
         engine == .vlc ? vlc?.errorMessage : nil
     }
 
-    var showEngineGear: Bool { nativeSupported == true }
+    // Always offer the engine selector: playback now defaults to VLC, and the
+    // gear is how the user opts into the native player (AirPlay / PiP).
+    var showEngineGear: Bool { true }
 
     /// The engine has been decided AND is actually playing — only then are the
     /// trailing controls valid to show (avoids flashing native-only icons like
@@ -377,6 +468,23 @@ final class PlaybackCoordinator: ObservableObject {
 
     func retryVLC() { vlc?.reload() }
 
+    /// Refresh the focused channel — restart its player connection (e.g. after a
+    /// network hiccup stalled the stream), on whichever engine it's using.
+    func reload() {
+        switch engine {
+        case .native: native?.reload()
+        case .vlc:    vlc?.reload()
+        }
+    }
+
+    /// Multiview audio focus: only the focused tile plays sound.
+    private(set) var isMuted = false
+    func setMuted(_ value: Bool) {
+        isMuted = value
+        native?.setMuted(value)
+        vlc?.setMuted(value)
+    }
+
     func select(_ target: PlayerEngine) {
         guard target != engine else { return }
         switch target {
@@ -405,6 +513,7 @@ final class PlaybackCoordinator: ObservableObject {
         }
         model.onPiPRestoreUI = { [weak self] in self?.onRestoreUI?() }
         model.onPiPStopped = { [weak self] in self?.onPiPStopped?() }
+        model.setMuted(isMuted)
         bind(model)
         native = model
         engine = .native
@@ -419,6 +528,7 @@ final class PlaybackCoordinator: ObservableObject {
     private func ensureVLC(fresh: Bool) {
         if vlc == nil {
             let model = PlayerModel(stream: stream)   // auto-plays on init
+            model.setMuted(isMuted)
             bind(model)
             vlc = model
         } else if fresh {
@@ -443,19 +553,80 @@ final class PlaybackCoordinator: ObservableObject {
 // MARK: - Full player screen with custom controls
 
 struct PlayerView: View {
-    @ObservedObject private var coordinator: PlaybackCoordinator
-    @ObservedObject private var liveStore = LiveStore.shared
-
-    /// The coordinator is owned by PlaybackSession (so it can outlive this view
-    /// for Picture in Picture) — the view only observes it.
-    init(coordinator: PlaybackCoordinator) {
-        _coordinator = ObservedObject(wrappedValue: coordinator)
-    }
+    @ObservedObject private var session = PlaybackSession.shared
+    @State private var showAddSheet = false
+    @Environment(\.verticalSizeClass) private var vSizeClass
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            videoSurface
+            if let active = session.coordinator {
+                if session.tiles.count == 1 {
+                    SinglePlayerContent(coordinator: active, showAddSheet: $showAddSheet)
+                } else {
+                    multiView(active: active)
+                }
+            }
+        }
+        .statusBarHidden()
+        .sheet(isPresented: $showAddSheet) { AddChannelSheet { showAddSheet = false } }
+    }
+
+    // MARK: Multiview mosaic
+
+    @ViewBuilder
+    private func multiView(active: PlaybackCoordinator) -> some View {
+        ZStack {
+            tilesGrid()
+            // In the mosaic the top bar is always visible and drives the focused tile.
+            PlayerControlsBar(coordinator: active, showAddSheet: $showAddSheet)
+        }
+    }
+
+    /// Portrait → tiles stacked vertically. Landscape → side-by-side (≤2) or a
+    /// 2×2 grid (3–4). Every tile gets an equal share of the screen.
+    @ViewBuilder
+    private func tilesGrid() -> some View {
+        let count = session.tiles.count
+        let landscape = vSizeClass == .compact
+        if landscape && count <= 2 {
+            HStack(spacing: 2) { ForEach(0..<count, id: \.self) { tile($0) } }
+        } else if landscape {
+            VStack(spacing: 2) {
+                HStack(spacing: 2) { tile(0); tile(1) }
+                HStack(spacing: 2) {
+                    tile(2)
+                    if count > 3 { tile(3) } else { Color.black.frame(maxWidth: .infinity, maxHeight: .infinity) }
+                }
+            }
+        } else {
+            VStack(spacing: 2) { ForEach(0..<count, id: \.self) { tile($0) } }
+        }
+    }
+
+    private func tile(_ index: Int) -> some View {
+        TileView(
+            coordinator: session.tiles[index],
+            isActive: index == session.activeIndex,
+            canRemove: session.tiles.count > 1,
+            onSelect: { session.setActive(index) },
+            onRemove: { session.removeTile(at: index) }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Single-channel player (full-screen, custom controls)
+
+private struct SinglePlayerContent: View {
+    @ObservedObject var coordinator: PlaybackCoordinator
+    @Binding var showAddSheet: Bool
+
+    var body: some View {
+        ZStack {
+            PlaybackVideoSurface(coordinator: coordinator)
+                .id(ObjectIdentifier(coordinator))
+                .ignoresSafeArea()
 
             if let error = coordinator.errorMessage {
                 errorOverlay(error)
@@ -465,16 +636,20 @@ struct PlayerView: View {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
 
-            if coordinator.showControls && coordinator.errorMessage == nil { controlsOverlay }
+            if coordinator.showControls && coordinator.errorMessage == nil {
+                PlayerControlsBar(coordinator: coordinator, showAddSheet: $showAddSheet)
+            }
         }
-        .statusBarHidden()
+        // Channel name, bottom-left — shown with the controls (hidden when the
+        // player is tapped into immersive mode).
+        .overlay(alignment: .bottomLeading) {
+            if coordinator.showControls && coordinator.errorMessage == nil {
+                ChannelNameLabel(text: coordinator.stream.title).padding()
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { withAnimation { coordinator.showControls.toggle() } }
         .sheet(isPresented: $coordinator.showEngineSheet) { engineSheet }
-    }
-
-    private var videoSurface: some View {
-        PlaybackVideoSurface(coordinator: coordinator).ignoresSafeArea()
     }
 
     private var airPlayOverlay: some View {
@@ -505,17 +680,72 @@ struct PlayerView: View {
         }
     }
 
-    private var controlsOverlay: some View {
+    private var engineSheet: some View {
+        NavContainer {
+            List {
+                Section {
+                    ForEach(PlayerEngine.allCases) { option in
+                        Button {
+                            coordinator.select(option)
+                            coordinator.showEngineSheet = false
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.title).foregroundStyle(Theme.textPrimary)
+                                    Text(option.subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
+                                }
+                                Spacer()
+                                if coordinator.engine == option {
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent).font(.body.weight(.semibold))
+                                }
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("The native player supports AirPlay and Picture in Picture. Some channels stream in a format only the VLC player can decode.")
+                }
+            }
+            .navigationTitle("Player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { coordinator.showEngineSheet = false }
+                }
+            }
+        }
+        .mediumDetentIfAvailable()
+    }
+}
+
+// MARK: - Shared top control bar (acts on the focused coordinator)
+
+private struct PlayerControlsBar: View {
+    @ObservedObject var coordinator: PlaybackCoordinator
+    @ObservedObject private var liveStore = LiveStore.shared
+    @ObservedObject private var session = PlaybackSession.shared
+    @Binding var showAddSheet: Bool
+
+    var body: some View {
         VStack {
             HStack(spacing: 18) {
                 // Chevron-down shrinks the player into the floating mini player
-                // and keeps the stream playing while the user browses.
+                // and keeps the (focused) stream playing while the user browses.
                 Button { PlaybackSession.shared.minimize() } label: {
                     Image(systemName: "chevron.down").font(.title3.weight(.bold))
                 }
                 .accessibilityLabel("Minimize")
-                Text(coordinator.stream.title).font(.headline).lineLimit(1)
+                // The channel name lives at the bottom-left of each tile now, so a
+                // single title up here doesn't make sense once there are several.
                 Spacer()
+
+                // "+" adds another channel to the mosaic (up to maxTiles); sits
+                // just left of the favorite heart.
+                if session.canAddMore {
+                    Button { showAddSheet = true } label: {
+                        Image(systemName: "plus").font(.title3.weight(.bold))
+                    }
+                    .accessibilityLabel("Add Channel")
+                }
 
                 // Trailing controls appear only once the engine is resolved and
                 // playing, so no invalid/native-only icon flashes during detection.
@@ -556,6 +786,12 @@ struct PlayerView: View {
                             .font(.title3)
                     }
 
+                    // Refresh the focused channel (reconnect a stalled stream).
+                    Button { coordinator.reload() } label: {
+                        Image(systemName: "arrow.clockwise").font(.title3)
+                    }
+                    .accessibilityLabel("Refresh Channel")
+
                     if coordinator.showEngineGear {
                         Button { coordinator.showEngineSheet = true } label: {
                             Image(systemName: "gearshape.fill").font(.title3)
@@ -563,7 +799,7 @@ struct PlayerView: View {
                     }
                 }
 
-                // Always available: fully close the channel and exit the player.
+                // Always available: fully close all channels and exit the player.
                 Button { PlaybackSession.shared.endCurrent() } label: {
                     Image(systemName: "xmark").font(.title3.weight(.bold))
                 }
@@ -576,43 +812,78 @@ struct PlayerView: View {
         }
         .background(
             LinearGradient(colors: [.black.opacity(0.6), .clear, .black.opacity(0.6)],
-                           startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)   // don't eat taps meant for the tiles below
         )
     }
+}
 
-    private var engineSheet: some View {
-        NavContainer {
-            List {
-                Section {
-                    ForEach(PlayerEngine.allCases) { option in
-                        Button {
-                            coordinator.select(option)
-                            coordinator.showEngineSheet = false
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.title).foregroundStyle(Theme.textPrimary)
-                                    Text(option.subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
-                                }
-                                Spacer()
-                                if coordinator.engine == option {
-                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent).font(.body.weight(.semibold))
-                                }
-                            }
-                        }
-                    }
-                } footer: {
-                    Text("The native player supports AirPlay and Picture in Picture. Some channels stream in a format only the VLC player can decode.")
-                }
-            }
-            .navigationTitle("Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { coordinator.showEngineSheet = false }
-                }
+// MARK: - One tile in the multiview mosaic
+
+private struct TileView: View {
+    @ObservedObject var coordinator: PlaybackCoordinator
+    let isActive: Bool
+    let canRemove: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black
+            PlaybackVideoSurface(coordinator: coordinator)
+                .id(ObjectIdentifier(coordinator))
+
+            if coordinator.isBuffering {
+                ProgressView().tint(.white)
+            } else if coordinator.errorMessage != nil {
+                Image(systemName: "play.slash.fill")
+                    .font(.title).foregroundStyle(.white.opacity(0.6))
             }
         }
-        .mediumDetentIfAvailable()
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(isActive ? Theme.accent : .white.opacity(0.08),
+                              lineWidth: isActive ? 2 : 1)
+        )
+        // Audio-focus indicator, top-left (the focused tile is the one with sound).
+        .overlay(alignment: .topLeading) {
+            Image(systemName: isActive ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                .font(.caption2).foregroundStyle(.white)
+                .padding(6).background(.black.opacity(0.5), in: Circle())
+                .padding(6)
+        }
+        // Remove "×", vertically centered on the right edge — clear of the top
+        // control bar that overlaps the first tile.
+        .overlay(alignment: .trailing) {
+            if canRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold)).foregroundStyle(.white)
+                        .padding(8).background(.black.opacity(0.5), in: Circle())
+                }
+                .padding(.trailing, 8)
+            }
+        }
+        // Channel name, bottom-left of this tile's space.
+        .overlay(alignment: .bottomLeading) {
+            ChannelNameLabel(text: coordinator.stream.title).padding(8)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+    }
+}
+
+/// Small channel-name pill shown at the bottom-left of a video surface.
+private struct ChannelNameLabel: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.caption).fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.black.opacity(0.55), in: Capsule())
     }
 }
