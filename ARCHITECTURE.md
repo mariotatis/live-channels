@@ -146,6 +146,24 @@ URLs the engine fetches directly).
   Closing the player calls `PlaybackSession.dismiss()`: it keeps the session alive when PiP is active,
   otherwise tears everything down. PiP closed from its own window ends playback (unless the full UI is
   showing, where it just returns to inline).
+- **In‑app mini player** (`MiniPlayerView`, a root‑level `.overlay` in `RootTabView`, driven by
+  `PlaybackSession.isMinimized`): an app‑drawn PiP stand‑in that works on **both** engines (system PiP
+  is AVPlayer‑only, most channels are VLC). The player's top‑left **chevron‑down** calls
+  `minimize()` (shrink to the floating window, keep playing) and the top‑right **X** calls
+  `endCurrent()` (full close). The window is 16:9, **75% of width in portrait / 50% of height in
+  landscape** so a wide window can't swallow the screen. Tapping it calls `expand()` (back to full
+  screen); its own X ends playback. While a mini player is up, `present(_:)` keeps the new channel
+  **in the mini player** (swap, stay minimized) instead of going full screen — so tapping channels
+  while browsing just swaps what's playing, and the navigation stack underneath is never touched (the
+  player is a modal/overlay, so expanding→closing always returns to the current section).
+  The mini player **always runs on VLC** (consistent, and PiP/AirPlay don't apply in the floating
+  window): `minimize()` calls `coordinator.select(.vlc)` and a channel swapped in while minimized is
+  built with `PlaybackCoordinator(stream:, startOn: .vlc)` (skips native detection). Two view
+  gotchas were required to avoid a black window: (1) the VLC surface is a **single model‑owned view**
+  (`PlayerModel.containerView`) re‑parented between the full‑screen and mini surfaces, mirroring
+  `NativePlayerModel.playerView`, so moving it doesn't drop the video output; (2) `PlayerView` and
+  `MiniPlayerView` are tagged `.id(ObjectIdentifier(coordinator))` in `RootTabView`, so swapping to a
+  new channel (new coordinator) rebuilds the video surface instead of reusing the torn‑down one.
 - **Native‑capability detection** (`NativePlayerModel`): a channel is deemed AVPlayer‑playable when
   `AVPlayerItem.presentationSize` leaves `.zero` (real frames rendered). It's deemed unsupported when
   the item `.failed`, `AVPlayerItemFailedToPlayToEndTime` fires, `presentationSize` is still `.zero`

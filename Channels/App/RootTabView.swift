@@ -18,8 +18,25 @@ struct RootTabView: View {
             .tint(Theme.accent)
             .fullScreenCover(isPresented: $playbackSession.isPresenting) {
                 if let coordinator = playbackSession.coordinator {
+                    // .id ties the view to the coordinator: swapping to a new
+                    // channel (new coordinator) rebuilds the video surface
+                    // instead of reusing the torn-down one (which shows black).
                     PlayerView(coordinator: coordinator)
+                        .id(ObjectIdentifier(coordinator))
                 }
             }
+            // Floating mini player: shown when the full-screen player has been
+            // minimized (and system PiP isn't already floating the video).
+            .overlay(alignment: .bottomTrailing) {
+                if playbackSession.isMinimized,
+                   let coordinator = playbackSession.coordinator,
+                   !coordinator.isPiPActive {
+                    MiniPlayerView(coordinator: coordinator)
+                        .id(ObjectIdentifier(coordinator))
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85),
+                       value: playbackSession.isMinimized)
     }
 }

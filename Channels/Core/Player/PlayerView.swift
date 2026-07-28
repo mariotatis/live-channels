@@ -25,7 +25,11 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
 
     let stream: PlayableStream
     let mediaPlayer = VLCMediaPlayer()
-    weak var container: VLCContainerView?
+    /// A single, long-lived video view owned by the model. It is re-parented
+    /// between the full-screen player and the mini player rather than recreated,
+    /// so libvlc's video output stays attached and doesn't go black on the move
+    /// (the same trick NativePlayer uses for its AVPlayerLayer).
+    let containerView = VLCContainerView()
 
     private var hasStarted = false
     private var didTeardown = false
@@ -36,6 +40,8 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
         super.init()
         configureAudioSession()
         mediaPlayer.delegate = self
+        containerView.player = mediaPlayer
+        mediaPlayer.drawable = containerView.videoView
         if let source = stream.primary {
             Task { await load(source) }
         }
@@ -151,7 +157,7 @@ final class PlayerModel: NSObject, ObservableObject, VLCMediaPlayerDelegate {
         refreshSubtitles()
         // Video dimensions may only become known once decoding starts — re-apply
         // the fill geometry now that the aspect ratio is available.
-        container?.setNeedsLayout()
+        containerView.setNeedsLayout()
     }
 
     func teardown() {
@@ -216,16 +222,39 @@ struct VLCVideoView: UIViewRepresentable {
     let model: PlayerModel
     let fill: Bool
 
+    /// Return the model-owned view (detached from any old superview) so the same
+    /// VLC surface moves between the full-screen and mini players without the
+    /// video output going black.
     func makeUIView(context: Context) -> VLCContainerView {
-        let container = VLCContainerView()
-        container.player = model.mediaPlayer
-        model.mediaPlayer.drawable = container.videoView
-        model.container = container
-        return container
+        model.containerView.removeFromSuperview()
+        return model.containerView
     }
 
     func updateUIView(_ container: VLCContainerView, context: Context) {
         container.fill = fill
+    }
+}
+
+/// The raw video output for the current engine, with no controls. Shared by the
+/// full-screen `PlayerView` and the floating `MiniPlayerView` so the same
+/// VLC/AVPlayer model drives whichever surface is currently on screen.
+struct PlaybackVideoSurface: View {
+    @ObservedObject var coordinator: PlaybackCoordinator
+    /// Overrides the VLC fill mode; nil honors the user's toggle (full screen),
+    /// the mini player passes `false` so nothing is cropped in the small window.
+    var fill: Bool? = nil
+
+    var body: some View {
+        switch coordinator.engine {
+        case .native:
+            if let native = coordinator.native {
+                NativeVideoView(model: native)
+            }
+        case .vlc:
+            if let vlc = coordinator.vlc {
+                VLCVideoView(model: vlc, fill: fill ?? vlc.fillScreen)
+            }
+        }
     }
 }
 
@@ -264,9 +293,17 @@ final class PlaybackCoordinator: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    init(stream: PlayableStream) {
+    init(stream: PlayableStream, startOn engine: PlayerEngine = .native) {
         self.stream = stream
-        startNative()
+        switch engine {
+        case .native:
+            startNative()
+        case .vlc:
+            // Start straight on VLC (used by the mini player) — skip native
+            // detection entirely.
+            ensureVLC(fresh: true)
+            self.engine = .vlc
+        }
     }
 
     var isPiPActive: Bool { native?.isPiPActive ?? false }
@@ -436,18 +473,8 @@ struct PlayerView: View {
         .sheet(isPresented: $coordinator.showEngineSheet) { engineSheet }
     }
 
-    @ViewBuilder
     private var videoSurface: some View {
-        switch coordinator.engine {
-        case .native:
-            if let native = coordinator.native {
-                NativeVideoView(model: native).ignoresSafeArea()
-            }
-        case .vlc:
-            if let vlc = coordinator.vlc {
-                VLCVideoView(model: vlc, fill: vlc.fillScreen).ignoresSafeArea()
-            }
-        }
+        PlaybackVideoSurface(coordinator: coordinator).ignoresSafeArea()
     }
 
     private var airPlayOverlay: some View {
@@ -481,9 +508,12 @@ struct PlayerView: View {
     private var controlsOverlay: some View {
         VStack {
             HStack(spacing: 18) {
-                Button { PlaybackSession.shared.dismiss() } label: {
+                // Chevron-down shrinks the player into the floating mini player
+                // and keeps the stream playing while the user browses.
+                Button { PlaybackSession.shared.minimize() } label: {
                     Image(systemName: "chevron.down").font(.title3.weight(.bold))
                 }
+                .accessibilityLabel("Minimize")
                 Text(coordinator.stream.title).font(.headline).lineLimit(1)
                 Spacer()
 
@@ -532,6 +562,12 @@ struct PlayerView: View {
                         }
                     }
                 }
+
+                // Always available: fully close the channel and exit the player.
+                Button { PlaybackSession.shared.endCurrent() } label: {
+                    Image(systemName: "xmark").font(.title3.weight(.bold))
+                }
+                .accessibilityLabel("Close")
             }
             .foregroundStyle(.white)
             .padding()

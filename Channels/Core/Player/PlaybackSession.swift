@@ -22,23 +22,56 @@ final class PlaybackSession: ObservableObject {
 
     /// Drives the root-level full-screen player cover.
     @Published var isPresenting = false
-    /// The live playback engines; survives `isPresenting` going false while PiP runs.
+    /// Drives the floating in-app mini player (see MiniPlayerView). The same
+    /// coordinator keeps playing; only the surface it draws into changes.
+    @Published var isMinimized = false
+    /// The live playback engines; survives `isPresenting` going false while a
+    /// PiP or mini-player session runs.
     @Published private(set) var coordinator: PlaybackCoordinator?
 
     private init() {}
 
     /// Begin playing a resolved stream, replacing any current playback.
+    ///
+    /// If the mini player is currently up, the new channel takes over the mini
+    /// player (stays minimized) so tapping channels while browsing swaps what's
+    /// playing without yanking the user to full screen — they expand to the
+    /// details page by tapping the mini player itself. With no mini player up,
+    /// a tapped channel opens full screen as before.
     func present(_ stream: PlayableStream) {
+        let keepMinimized = isMinimized && coordinator != nil
         endCurrent()
-        let coordinator = PlaybackCoordinator(stream: stream)
-        coordinator.onRestoreUI = { [weak self] in self?.isPresenting = true }
+        // The mini player always runs on VLC (consistent, and PiP/AirPlay don't
+        // apply in the floating window), so a channel swapped in while minimized
+        // starts straight on VLC.
+        let coordinator = PlaybackCoordinator(stream: stream, startOn: keepMinimized ? .vlc : .native)
+        coordinator.onRestoreUI = { [weak self] in self?.expand() }
         coordinator.onPiPStopped = { [weak self] in
             guard let self else { return }
-            // PiP closed by the user. Only end playback if the full player UI
-            // isn't on screen (otherwise stopping PiP just returns to inline).
-            if !self.isPresenting { self.endCurrent() }
+            // PiP closed by the user. Only end playback if neither the full
+            // player nor the mini player is on screen (otherwise stopping PiP
+            // just returns to whichever inline surface is showing).
+            if !self.isPresenting && !self.isMinimized { self.endCurrent() }
         }
         self.coordinator = coordinator
+        isMinimized = keepMinimized
+        isPresenting = !keepMinimized
+    }
+
+    /// Shrink the full-screen player into the floating mini player, leaving the
+    /// stream playing while the user keeps navigating the app.
+    func minimize() {
+        guard let coordinator else { return }
+        // The mini player always runs on VLC — switch now if we were on native.
+        coordinator.select(.vlc)
+        isPresenting = false
+        isMinimized = true
+    }
+
+    /// Bring the mini player (or a restored PiP session) back to full screen.
+    func expand() {
+        guard coordinator != nil else { return }
+        isMinimized = false
         isPresenting = true
     }
 
@@ -51,10 +84,11 @@ final class PlaybackSession: ObservableObject {
         }
     }
 
-    /// Stop playback and drop the session.
+    /// Stop playback and drop the session (both full-screen and mini player).
     func endCurrent() {
         coordinator?.teardown()
         coordinator = nil
         isPresenting = false
+        isMinimized = false
     }
 }
