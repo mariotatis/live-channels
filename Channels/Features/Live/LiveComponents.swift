@@ -79,14 +79,8 @@ private struct LivePlayerModifier: ViewModifier {
                     }
                 }
             }
-            .alert("Playback Error", isPresented: Binding(
-                get: { playback.errorMessage != nil },
-                set: { if !$0 { playback.errorMessage = nil } }
-            )) {
-                Button("Refresh") { Task { await playback.refreshAndRetry() } }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(playback.errorMessage ?? "")
+            .refreshErrorAlert("Playback Error", message: $playback.errorMessage) {
+                Task { await playback.refreshAndRetry() }
             }
     }
 }

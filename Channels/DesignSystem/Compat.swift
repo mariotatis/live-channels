@@ -38,6 +38,23 @@ extension View {
         }
     }
 
+    /// Shared "action failed — Refresh / Cancel" alert used by the live-playback
+    /// flow and the add-channel sheet (both fail the same way: the shared session
+    /// was taken by another device). One place → one look & behaviour.
+    func refreshErrorAlert(_ title: String,
+                           message: Binding<String?>,
+                           onRefresh: @escaping () -> Void) -> some View {
+        alert(title, isPresented: Binding(
+            get: { message.wrappedValue != nil },
+            set: { if !$0 { message.wrappedValue = nil } }
+        )) {
+            Button("Refresh", action: onRefresh)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(message.wrappedValue ?? "")
+        }
+    }
+
     /// Constrains a sheet to a medium detent on iOS 16+; full-height on iOS 15.
     @ViewBuilder
     func mediumDetentIfAvailable() -> some View {

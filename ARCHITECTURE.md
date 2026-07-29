@@ -2,11 +2,7 @@
 
 A native iOS (SwiftUI) **live‑TV** client for the Xuper‑family "masnew" IPTV portal.
 The app is intentionally **Live‑TV only**: browse channels by category, search, favorite,
-and play. It talks to the **real portal API** (no mock/demo data).
-
-> Historical note: earlier iterations included Movies/Series/Sports/Kids/Downloads/Profile
-> and demo mode — all removed. VOD was dropped because the provider delivers it over a
-> proprietary P2P/"p2sp" engine that AVPlayer/VLC can't consume; **live is clean HLS and works.**
+and play. It talks to the **real portal API** (no mock/demo data). Live is clean HLS.
 
 ---
 
@@ -272,9 +268,9 @@ mirroring are available — VLC still can't feed PiP/AirPlay.
 
 ## 9. Data models — `Core/Models/`
 
-- `Common.swift`: `PosterList` (+ `iconURL`/`anyURL` helpers), `BaseResult`, `@LenientInt`
-  (decodes String‑or‑Number), `String.isSuccessReturnCode`.
-- `Session.swift`: `Session` (persisted triple + display fields), `ActiveData` (activation response),
+- `Common.swift`: `PosterList` (+ `iconURL`/`anyURL` helpers), `BaseResult`,
+  `String.isSuccessReturnCode`.
+- `Session.swift`: `Session` (persisted triple + `sn`/`heartBeatTime`), `ActiveData` (activation response),
   `PortalCode`.
 - `LiveModels.swift`: `Channel` (+ `logoURL`, `displayName`), `GetLiveDataResultData`,
   `LiveColumn` / `LiveColumnContentsResultData` (category tree), `LiveAddress`,
@@ -336,6 +332,5 @@ subtitle icons, PIN dots. App display name / splash / icon are all "Channels"
 
 - Native PiP / AirPlay work on AVPlayer‑playable channels; HEVC‑in‑TS channels fall back to VLC,
   where only background audio + screen mirroring are available.
-- VOD (movies/shows) not supported (proprietary P2P delivery).
 - Shared single‑device account: one active session at a time.
 - `Info.plist` sets `NSAllowsArbitraryLoads` (the live CDN + local proxy are cleartext HTTP).

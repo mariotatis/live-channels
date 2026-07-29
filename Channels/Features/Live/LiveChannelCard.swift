@@ -21,7 +21,8 @@ struct LiveChannelCard: View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .topTrailing) {
-                    PosterImage(url: channel.logoURL, aspectRatio: 16.0 / 9.0, corner: Theme.posterCorner)
+                    PosterImage(url: channel.logoURL, aspectRatio: 16.0 / 9.0, corner: Theme.posterCorner,
+                                contentMode: .fit, contentScale: 0.9)
 
                     if isLoading {
                         ZStack {

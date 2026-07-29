@@ -2,7 +2,7 @@
 //  LiveModels.swift
 //  Channels
 //
-//  Live TV, EPG, catch-up, playback stream models (docs 05, 12, 14).
+//  Live TV catalog + playback stream models (channels, categories, CDN/GSLB).
 //
 
 import Foundation
@@ -87,7 +87,7 @@ struct SlbInfoData: Codable {
 }
 
 struct SlbCdn: Codable {
-    var tag: String? = nil          // "live" / "vod" / "record"
+    var tag: String? = nil          // CDN tag; the app uses "live"
     var cdn_type: String? = nil     // matches LiveAddress.cdnType
     var main_addr: String? = nil    // CDN host (may include a /path)
     var url_list: [SlbUrl]? = nil

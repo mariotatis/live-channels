@@ -3,9 +3,9 @@
 //  Channels
 //
 //  "Live Channels" home: an "All Channels" shortcut on top, then the portal's
-//  live category names (Deportes, Cine y Series, countries, Noticias, NFL/NBA
-//  PASS, Música…). Tapping a category pushes a searchable channel grid; the
-//  toolbar has quick access to liked channels and parental control.
+//  live category names (Deportes, countries, Noticias, NFL/NBA PASS, Música…).
+//  Tapping a category pushes a searchable channel grid; the toolbar has quick
+//  access to liked channels and parental control.
 //
 
 import SwiftUI

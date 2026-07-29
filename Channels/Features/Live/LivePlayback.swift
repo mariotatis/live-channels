@@ -54,6 +54,10 @@ final class LivePlayback: ObservableObject {
         errorMessage = nil
         await LiveStore.shared.refresh()
         isRefreshing = false
+        // Let the error alert finish dismissing before presenting the player —
+        // presenting a full-screen cover too soon after an alert dismisses makes
+        // SwiftUI silently drop it (so it'd refresh but never open the channel).
+        try? await Task.sleep(nanoseconds: 400_000_000)
         if let attempt = lastAttempt {
             await start(attempt.channel, columnId: attempt.columnId)
         }

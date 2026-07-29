@@ -13,6 +13,11 @@ struct PosterImage: View {
     let url: URL?
     var aspectRatio: CGFloat = 2.0 / 3.0     // portrait poster by default
     var corner: CGFloat = Theme.posterCorner
+    /// `.fill` crops to fill the box (posters); `.fit` shows the whole image
+    /// (channel logos, which get cut off when cropped).
+    var contentMode: ContentMode = .fill
+    /// Shrinks the image within its box (e.g. 0.9 = 10% smaller) for breathing room.
+    var contentScale: CGFloat = 1
 
     var body: some View {
         // A fixed-aspect box (sized by its width); the image fills and is clipped to it.
@@ -22,7 +27,9 @@ struct PosterImage: View {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
-                        image.resizable().scaledToFill()
+                        image.resizable()
+                            .aspectRatio(contentMode: contentMode)
+                            .scaleEffect(contentScale)
                     case .empty:
                         ZStack { Theme.surfaceElevated; ProgressView().tint(Theme.textTertiary) }
                     case .failure:

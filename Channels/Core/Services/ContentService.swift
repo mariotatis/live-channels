@@ -2,10 +2,8 @@
 //  ContentService.swift
 //  Channels
 //
-//  High-level content API. Live TV only — the app is built entirely around the
-//  portal's live channel catalog (VOD/movies/shows were dropped because they
-//  are delivered over the vendor's proprietary P2P engine, which AVPlayer
-//  cannot consume). All calls hit the real portal backend (docs 03–09).
+//  High-level live-TV content API: the channel catalog, category tree, and
+//  per-channel playback resolution. All calls hit the real portal backend.
 //
 
 import Foundation
@@ -26,7 +24,7 @@ final class ContentService {
         return try await client.call(.getLiveData, params: params, as: GetLiveDataResultData.self).channelList ?? []
     }
 
-    /// The live category tree (Deportes, Cine y Series, countries, NFL/NBA PASS…)
+    /// The live category tree (Deportes, countries, NFL/NBA PASS…)
     /// from getColumnContents on the live root column (76175).
     func liveCategories() async throws -> [LiveColumn] {
         let params: [String: Any] = ["columnId": AppConfig.liveCategoryColumnId, "pageNum": 1, "pageSize": 100]

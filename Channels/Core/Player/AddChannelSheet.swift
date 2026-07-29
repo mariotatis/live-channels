@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct AddChannelSheet: View {
     let onClose: () -> Void
@@ -20,6 +21,7 @@ struct AddChannelSheet: View {
         NavContainer {
             AddChannelCategoryList(onClose: onClose)
         }
+        .tint(Theme.accent)   // match the app's accent (alert/back buttons) inside the cover
         .fractionDetentIfAvailable(0.75)
     }
 }
@@ -94,8 +96,21 @@ private struct AddChannelGrid: View {
     @State private var isLoading = true
     @State private var query = ""
     @State private var loadingCode: String?
+    @State private var errorMessage: String?
+    @State private var lastFailed: Channel?
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
+    /// Match the Home grid: 6 per row in landscape (compact height) or on iPad,
+    /// 3 per row in portrait.
+    private var columns: [GridItem] {
+        let count: Int
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            count = 6
+        } else {
+            count = verticalSizeClass == .compact ? 6 : 3
+        }
+        return Array(repeating: GridItem(.flexible(), spacing: 10), count: count)
+    }
 
     private var columnId: Int { category?.id ?? AppConfig.liveColumnId }
     private var title: String { category?.name ?? "All Channels" }
@@ -144,14 +159,25 @@ private struct AddChannelGrid: View {
             channels = category == nil ? store.allChannels : await store.channels(for: category!)
             isLoading = false
         }
+        .refreshErrorAlert("Couldn’t Add Channel", message: $errorMessage) {
+            Task {
+                await LiveStore.shared.refresh()
+                if let channel = lastFailed { await add(channel) }
+            }
+        }
     }
 
     private func add(_ channel: Channel) async {
         loadingCode = channel.channelCode
         defer { loadingCode = nil }
-        guard let stream = try? await ContentService.shared.liveStream(channel: channel, columnId: columnId)
-        else { return }
-        PlaybackSession.shared.addChannel(stream)
-        onClose()
+        do {
+            let stream = try await ContentService.shared.liveStream(channel: channel, columnId: columnId)
+            PlaybackSession.shared.addChannel(stream)
+            onClose()
+        } catch {
+            lastFailed = channel
+            errorMessage = "Couldn’t add \(channel.displayName). Another device may have taken the "
+                         + "session — tap Refresh to reclaim it and try again."
+        }
     }
 }

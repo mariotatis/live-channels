@@ -555,6 +555,12 @@ final class PlaybackCoordinator: ObservableObject {
 struct PlayerView: View {
     @ObservedObject private var session = PlaybackSession.shared
     @State private var showAddSheet = false
+    @State private var showControls = true
+    /// Temporary accent border on the focused tile (fades after 3s; the lasting
+    /// "selected" cue is the channel-name pill's accent background).
+    @State private var borderHighlight = false
+    @State private var hideControlsToken = 0
+    @State private var borderToken = 0
     @Environment(\.verticalSizeClass) private var vSizeClass
 
     var body: some View {
@@ -562,7 +568,10 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
             if let active = session.coordinator {
                 if session.tiles.count == 1 {
-                    SinglePlayerContent(coordinator: active, showAddSheet: $showAddSheet)
+                    SinglePlayerContent(coordinator: active,
+                                        showAddSheet: $showAddSheet,
+                                        showControls: showControls,
+                                        onToggleControls: { toggleControls() })
                 } else {
                     multiView(active: active)
                 }
@@ -570,6 +579,50 @@ struct PlayerView: View {
         }
         .statusBarHidden()
         .sheet(isPresented: $showAddSheet) { AddChannelSheet { showAddSheet = false } }
+        .onAppear { revealControls() }
+        // Selecting/adding a channel flashes its border and re-shows the controls.
+        .onChange(of: session.activeIndex) { _ in flashBorder(); revealControls() }
+        .onChange(of: session.tiles.count) { _ in revealControls() }
+    }
+
+    // MARK: Controls visibility (auto-hide after 6s)
+
+    private func revealControls() {
+        withAnimation { showControls = true }
+        scheduleHideControls()
+    }
+
+    private func toggleControls() {
+        withAnimation { showControls.toggle() }
+        if showControls { scheduleHideControls() } else { hideControlsToken += 1 }
+    }
+
+    private func scheduleHideControls() {
+        hideControlsToken += 1
+        let token = hideControlsToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            if token == hideControlsToken { withAnimation { showControls = false } }
+        }
+    }
+
+    /// Show the focused tile's accent border, then fade it after 3s.
+    private func flashBorder() {
+        withAnimation { borderHighlight = true }
+        borderToken += 1
+        let token = borderToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if token == borderToken { withAnimation { borderHighlight = false } }
+        }
+    }
+
+    /// Tapping a tile: focus it if it isn't already the active one; if it IS
+    /// already active, toggle the controls (so you can go immersive in a mosaic).
+    private func selectTile(_ index: Int) {
+        if index == session.activeIndex {
+            toggleControls()
+        } else {
+            session.setActive(index)   // onChange(activeIndex) flashes border + reveals controls
+        }
     }
 
     // MARK: Multiview mosaic
@@ -578,8 +631,10 @@ struct PlayerView: View {
     private func multiView(active: PlaybackCoordinator) -> some View {
         ZStack {
             tilesGrid()
-            // In the mosaic the top bar is always visible and drives the focused tile.
-            PlayerControlsBar(coordinator: active, showAddSheet: $showAddSheet)
+            if showControls {
+                PlayerControlsBar(coordinator: active, showAddSheet: $showAddSheet)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -608,8 +663,10 @@ struct PlayerView: View {
         TileView(
             coordinator: session.tiles[index],
             isActive: index == session.activeIndex,
+            showBorder: borderHighlight,
+            showChrome: showControls,
             canRemove: session.tiles.count > 1,
-            onSelect: { session.setActive(index) },
+            onSelect: { selectTile(index) },
             onRemove: { session.removeTile(at: index) }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -621,6 +678,8 @@ struct PlayerView: View {
 private struct SinglePlayerContent: View {
     @ObservedObject var coordinator: PlaybackCoordinator
     @Binding var showAddSheet: Bool
+    var showControls: Bool
+    var onToggleControls: () -> Void
 
     var body: some View {
         ZStack {
@@ -636,19 +695,20 @@ private struct SinglePlayerContent: View {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
 
-            if coordinator.showControls && coordinator.errorMessage == nil {
+            if showControls && coordinator.errorMessage == nil {
                 PlayerControlsBar(coordinator: coordinator, showAddSheet: $showAddSheet)
+                    .transition(.opacity)
             }
         }
         // Channel name, bottom-left — shown with the controls (hidden when the
-        // player is tapped into immersive mode).
+        // player goes immersive / auto-hides).
         .overlay(alignment: .bottomLeading) {
-            if coordinator.showControls && coordinator.errorMessage == nil {
+            if showControls && coordinator.errorMessage == nil {
                 ChannelNameLabel(text: coordinator.stream.title).padding()
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation { coordinator.showControls.toggle() } }
+        .onTapGesture { onToggleControls() }
         .sheet(isPresented: $coordinator.showEngineSheet) { engineSheet }
     }
 
@@ -807,15 +867,18 @@ private struct PlayerControlsBar: View {
             }
             .foregroundStyle(.white)
             .padding()
+            // The gradient backs ONLY the top strip and is hittable, so it claims
+            // taps in the controls area (buttons work) instead of letting them
+            // fall through to — and be swallowed by — the tile's select gesture.
+            // The rest of the screen is uncovered, so tiles below stay tappable.
+            .background(
+                LinearGradient(colors: [.black.opacity(0.65), .clear],
+                               startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea(edges: .top)
+            )
 
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .background(
-            LinearGradient(colors: [.black.opacity(0.6), .clear, .black.opacity(0.6)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)   // don't eat taps meant for the tiles below
-        )
     }
 }
 
@@ -824,9 +887,16 @@ private struct PlayerControlsBar: View {
 private struct TileView: View {
     @ObservedObject var coordinator: PlaybackCoordinator
     let isActive: Bool
+    /// Whether the (temporary) accent border is currently showing for this tile.
+    let showBorder: Bool
+    /// Whether the tile's chrome (remove button + name) is visible — tied to the
+    /// main controls overlay so it auto-hides with them.
+    let showChrome: Bool
     let canRemove: Bool
     let onSelect: () -> Void
     let onRemove: () -> Void
+
+    private var highlighted: Bool { isActive && showBorder }
 
     var body: some View {
         ZStack {
@@ -844,46 +914,47 @@ private struct TileView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(isActive ? Theme.accent : .white.opacity(0.08),
-                              lineWidth: isActive ? 2 : 1)
+                .strokeBorder(highlighted ? Theme.accent : .white.opacity(0.08),
+                              lineWidth: highlighted ? 2 : 1)
         )
-        // Audio-focus indicator, top-left (the focused tile is the one with sound).
-        .overlay(alignment: .topLeading) {
-            Image(systemName: isActive ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                .font(.caption2).foregroundStyle(.white)
-                .padding(6).background(.black.opacity(0.5), in: Circle())
-                .padding(6)
-        }
-        // Remove "×", vertically centered on the right edge — clear of the top
-        // control bar that overlaps the first tile.
+        // Remove "×", vertically centered on the right edge — shows/hides with the
+        // main controls (clear of the top control bar that overlaps the first tile).
         .overlay(alignment: .trailing) {
-            if canRemove {
+            if canRemove && showChrome {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.bold)).foregroundStyle(.white)
                         .padding(8).background(.black.opacity(0.5), in: Circle())
                 }
                 .padding(.trailing, 8)
+                .transition(.opacity)
             }
         }
-        // Channel name, bottom-left of this tile's space.
+        // Channel name, bottom-left — shows/hides with the controls. Its accent
+        // background marks which tile is the focused (audio) one.
         .overlay(alignment: .bottomLeading) {
-            ChannelNameLabel(text: coordinator.stream.title).padding(8)
+            if showChrome {
+                ChannelNameLabel(text: coordinator.stream.title, highlighted: isActive)
+                    .padding(8)
+                    .transition(.opacity)
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
     }
 }
 
-/// Small channel-name pill shown at the bottom-left of a video surface.
+/// Small channel-name pill shown at the bottom-left of a video surface. When
+/// `highlighted` (the focused tile in a mosaic), its background is the accent.
 private struct ChannelNameLabel: View {
     let text: String
+    var highlighted: Bool = false
     var body: some View {
         Text(text)
             .font(.caption).fontWeight(.semibold)
             .foregroundStyle(.white)
             .lineLimit(1)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(.black.opacity(0.55), in: Capsule())
+            .background(highlighted ? Theme.accent : Color.black.opacity(0.55), in: Capsule())
     }
 }

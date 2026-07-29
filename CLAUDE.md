@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A native iOS (SwiftUI) **live-TV only** client for the Xuper-family "masnew" IPTV portal. It talks to the **real portal API** (no mock/demo data). VOD (movies/series) was deliberately removed — the provider delivers it over a proprietary P2P engine no player can consume; live is clean HLS. The project, target, app display name, icon, and splash are all "Channels" (bundle id `com.mariotatis.Channels`).
+A native iOS (SwiftUI) **live-TV** client for the Xuper-family "masnew" IPTV portal. It talks to the **real portal API** (no mock/demo data); live is clean HLS. The project, target, app display name, icon, and splash are all "Channels" (bundle id `com.mariotatis.Channels`).
 
 ## Build & run
 

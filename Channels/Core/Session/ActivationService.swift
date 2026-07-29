@@ -53,13 +53,9 @@ final class ActivationService: ObservableObject {
                 state = .failed("Service unavailable — contact provider.")
                 return
             }
-            let newSession = Session(sn: AppConfig.capturedSn, snToken: nil,
+            let newSession = Session(sn: AppConfig.capturedSn,
                                      userId: uid, userToken: token, portalCode: portal,
-                                     playlistUrl: activeData.playlistUrl,
-                                     heartBeatTime: activeData.heartBeatTime.flatMap { Int($0) },
-                                     restrictedStatus: activeData.restrictedStatus,
-                                     hasPay: activeData.hasPay, remainingDays: activeData.remainingDays,
-                                     customer: activeData.customer, tips: activeData.tips)
+                                     heartBeatTime: activeData.heartBeatTime.flatMap { Int($0) })
             persist(newSession)
             state = .active(newSession)
             startHeartbeat()
@@ -80,13 +76,9 @@ final class ActivationService: ObservableObject {
               let uid = activeData.userId, let token = activeData.userToken,
               let portal = activeData.portalCodeList?.first?.portalCode
         else { return }
-        let newSession = Session(sn: AppConfig.capturedSn, snToken: nil,
+        let newSession = Session(sn: AppConfig.capturedSn,
                                  userId: uid, userToken: token, portalCode: portal,
-                                 playlistUrl: activeData.playlistUrl,
-                                 heartBeatTime: activeData.heartBeatTime.flatMap { Int($0) },
-                                 restrictedStatus: activeData.restrictedStatus,
-                                 hasPay: activeData.hasPay, remainingDays: activeData.remainingDays,
-                                 customer: activeData.customer, tips: activeData.tips)
+                                 heartBeatTime: activeData.heartBeatTime.flatMap { Int($0) })
         persist(newSession)
         state = .active(newSession)   // same case as before → no splash flash
         startHeartbeat()

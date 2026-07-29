@@ -44,26 +44,3 @@ extension String {
     /// Success family: returnCode starting "aaa1000..." (confirm exact codes via capture).
     var isSuccessReturnCode: Bool { hasPrefix("aaa1000") || self == "aaa100094" }
 }
-
-// MARK: - Lenient scalar decoding
-
-/// Decodes an Int that may arrive as a String or number.
-@propertyWrapper
-struct LenientInt: Codable, Hashable {
-    var wrappedValue: Int?
-
-    init(wrappedValue: Int?) { self.wrappedValue = wrappedValue }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if let i = try? c.decode(Int.self) { wrappedValue = i }
-        else if let s = try? c.decode(String.self) { wrappedValue = Int(s) }
-        else if let d = try? c.decode(Double.self) { wrappedValue = Int(d) }
-        else { wrappedValue = nil }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        try c.encode(wrappedValue)
-    }
-}
